@@ -11,10 +11,14 @@ function getMobileSessionId() {
 
 const mobileSessionId = getMobileSessionId();
 const root = document.getElementById("root");
-
-ReactDOM.hydrateRoot(
-  root,
+const appTree = (
   <StrictMode>
     {mobileSessionId ? <MobilePage sessionId={mobileSessionId} /> : <App />}
-  </StrictMode>,
+  </StrictMode>
 );
+
+if (root.innerHTML.trim()) {
+  ReactDOM.hydrateRoot(root, appTree);
+} else {
+  ReactDOM.createRoot(root).render(appTree);
+}

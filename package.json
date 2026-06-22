@@ -1,13 +1,23 @@
 {
+  "name": "ai-assistant",
+  "version": "1.0.0",
+  "description": "Local AI assistant with voice, OCR, and mobile sync",
+  "author": "laxal",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "nodemon --watch server.js --ext js,mjs,cjs,json --ignore node_modules/.vite/** server.js --dev",
     "start": "node server.js",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build --outDir dist/client --ssrManifest",
-    "build:server": "vite build --outDir dist/server --ssr /entry-server.jsx",
+    "build:server": "vite build --outDir dist/server --ssr entry-server.jsx",
     "devinstall": "zx ../../devinstall.mjs -- node server.js --dev",
-    "lint": "eslint . --ext .js,.jsx --fix"
+    "lint": "eslint . --ext .js,.jsx --fix",
+    "electron:dev": "electron .",
+    "electron:preview": "npm run build && set ELECTRON_FORCE_PRODUCTION=1&& electron .",
+    "dist": "npm run build && electron-builder --win portable",
+    "dist:dir": "npm run build && electron-builder --win dir",
+    "dist:installer": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@alicloud/ocr-api20210707": "^3.1.3",
@@ -24,11 +34,36 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^35.7.5",
+    "electron-builder": "^25.1.8",
     "nodemon": "^3.1.10",
     "postcss": "^8.4.31",
     "postcss-nesting": "^12.0.2",
     "postcss-preset-env": "^7.7.1",
     "tailwindcss": "^3.4.1",
     "vite": "^5.0.2"
+  },
+  "build": {
+    "appId": "com.laxal.ai-assistant",
+    "productName": "AI Assistant",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "server/**/*",
+      "server.js",
+      "client/index.html",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    }
   }
 }

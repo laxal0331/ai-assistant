@@ -74,6 +74,7 @@ export default function App() {
   const chatScrollContainer = useRef(null);
   const activeAudioSourceRef = useRef("none");
   const transcriptSyncTimerRef = useRef(null);
+  const sendMessageWithImagesRef = useRef(null);
 
   async function sendToLlm(text) {
     const t = text.trim();
@@ -291,6 +292,7 @@ export default function App() {
       setComposerBusy(false);
     }
   }
+  sendMessageWithImagesRef.current = sendMessageWithImages;
 
   async function uploadResumeMd(file) {
     const text = await file.text();
@@ -360,6 +362,22 @@ export default function App() {
     if (savedSession) {
       sync.restoreSession(savedSession).catch(() => {});
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.desktopApp?.onScreenshot) return undefined;
+    return window.desktopApp.onScreenshot(async ({ imageBase64 }) => {
+      try {
+        const blob = await fetch(imageBase64).then((response) => response.blob());
+        const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
+        await sendMessageWithImagesRef.current?.({
+          text: "请解答图中内容，先给结论再给要点。",
+          files: [file],
+        });
+      } catch (error) {
+        window.alert(error?.message || String(error));
+      }
+    });
   }, []);
 
   useEffect(() => {

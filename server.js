@@ -1,9 +1,11 @@
 import express from "express";
 import fs from "fs";
+import path from "path";
 import { createServer } from "http";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
-import "dotenv/config";
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { recognizeImageBuffer } from "./server/aliyunOcr.js";
 import {
@@ -19,8 +21,18 @@ import {
 } from "./server/sessionHub.js";
 import { getNetworkInfo } from "./server/networkInfo.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envCandidates = [
+  process.env.DOTENV_CONFIG_PATH,
+  path.join(__dirname, ".env"),
+].filter(Boolean);
+for (const envPath of envCandidates) {
+  dotenv.config({ path: envPath });
+}
+
+let serverPort = Number(process.env.PORT) || 3000;
+
 const app = express();
-const port = Number(process.env.PORT) || 3000;
 const httpServer = createServer(app);
 app.use(express.json({ limit: "2mb" }));
 const ocrUpload = multer({
@@ -97,15 +109,36 @@ function buildResumeSummaryFromMarkdown(mdText) {
   return lines.slice(0, 40).join("\n").slice(0, 2000);
 }
 
-// Configure Vite middleware for React client (HMR shares httpServer to avoid port conflicts)
-const vite = await createViteServer({
-  server: {
-    middlewareMode: true,
-    hmr: { server: httpServer },
-  },
-  appType: "custom",
-});
-app.use(vite.middlewares);
+let vite;
+async function setupClientServing({ isProduction, rootDir }) {
+  if (isProduction) {
+    app.use(express.static(path.join(rootDir, "dist/client"), { index: false }));
+    return null;
+  }
+  vite = await createViteServer({
+    server: {
+      middlewareMode: true,
+      hmr: { server: httpServer },
+    },
+    appType: "custom",
+  });
+  app.use(vite.middlewares);
+  return vite;
+}
+
+async function renderClientPage(url, { isProduction, rootDir, activeVite }) {
+  if (isProduction) {
+    const template = fs.readFileSync(path.join(rootDir, "dist/client/index.html"), "utf-8");
+    return template.replace("<!--ssr-outlet-->", "");
+  }
+  const template = await activeVite.transformIndexHtml(
+    url,
+    fs.readFileSync(path.join(rootDir, "client/index.html"), "utf-8"),
+  );
+  const { render } = await activeVite.ssrLoadModule(path.join(rootDir, "client/entry-server.jsx"));
+  const appHtml = await render(url);
+  return template.replace("<!--ssr-outlet-->", appHtml?.html || "");
+}
 
 function buildChatPrompt(userText, options = {}) {
   const { useResumeContext = false, resumeSummary = "" } = options;
@@ -408,7 +441,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/api/network-info", (_req, res) => {
-  res.json(getNetworkInfo(port));
+  res.json(getNetworkInfo(serverPort));
 });
 
 app.post("/api/session", (_req, res) => {
@@ -416,7 +449,7 @@ app.post("/api/session", (_req, res) => {
   res.json({
     sessionId,
     mobilePath: `/m/${sessionId}`,
-    ...getNetworkInfo(port),
+    ...getNetworkInfo(serverPort),
   });
 });
 
@@ -535,33 +568,59 @@ app.post(
   },
 );
 
-// Render the React client
-app.use("*", async (req, res, next) => {
-  const url = req.originalUrl;
+export async function startServer(options = {}) {
+  const rootDir = options.rootDir || __dirname;
+  const isProduction = options.production ?? process.env.NODE_ENV === "production";
+  serverPort = Number(options.port || process.env.PORT) || 3000;
+  const port = serverPort;
 
-  try {
-    const template = await vite.transformIndexHtml(
-      url,
-      fs.readFileSync("./client/index.html", "utf-8"),
-    );
-    const { render } = await vite.ssrLoadModule("./client/entry-server.jsx");
-    const appHtml = await render(url);
-    const html = template.replace(`<!--ssr-outlet-->`, appHtml?.html);
-    res.status(200).set({ "Content-Type": "text/html" }).end(html);
-  } catch (e) {
-    vite.ssrFixStacktrace(e);
-    next(e);
+  if (options.envPath) {
+    dotenv.config({ path: options.envPath, override: true });
   }
-});
 
-httpServer.listen(port, "0.0.0.0", () => {
-  const network = getNetworkInfo(port);
-  console.log(`Express server running on port ${port}`);
-  if (network.lanIp) {
-    console.log(`  PC:     http://localhost:${port}`);
-    console.log(`  Mobile: http://${network.lanIp}:${port}`);
+  const activeVite = await setupClientServing({ isProduction, rootDir });
+
+  app.use("*", async (req, res, next) => {
+    try {
+      const html = await renderClientPage(req.originalUrl, { isProduction, rootDir, activeVite });
+      res.status(200).set({ "Content-Type": "text/html" }).end(html);
+    } catch (e) {
+      if (activeVite) activeVite.ssrFixStacktrace(e);
+      next(e);
+    }
+  });
+
+  if (httpServer.listening) {
+    return { port, httpServer, close: () => Promise.resolve() };
   }
-});
+
+  return new Promise((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(port, "0.0.0.0", () => {
+      httpServer.removeListener("error", reject);
+      const network = getNetworkInfo(port);
+      console.log(`Express server running on port ${port}`);
+      if (network.lanIp) {
+        console.log(`  PC:     http://localhost:${port}`);
+        console.log(`  Mobile: http://${network.lanIp}:${port}`);
+      }
+      resolve({
+        port,
+        httpServer,
+        close: () =>
+          new Promise((res, rej) => {
+            httpServer.close((err) => (err ? rej(err) : res()));
+          }),
+      });
+    });
+  });
+}
+
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isDirectRun) {
+  await startServer();
+}
 
 const dgWss = new WebSocketServer({ noServer: true });
 const sessionWss = new WebSocketServer({ noServer: true });
