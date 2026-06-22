@@ -1,16 +1,44 @@
 import express from "express";
 import fs from "fs";
+import { createServer } from "http";
 import { createServer as createViteServer } from "vite";
+import multer from "multer";
 import "dotenv/config";
 import { WebSocketServer, WebSocket } from "ws";
+import { recognizeImageBuffer } from "./server/aliyunOcr.js";
+import {
+  appendEvent,
+  addClient,
+  broadcast,
+  clearSession,
+  createSession,
+  getSession,
+  removeClient,
+  sendSnapshot,
+  setLiveTranscript,
+} from "./server/sessionHub.js";
+import { getNetworkInfo } from "./server/networkInfo.js";
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = Number(process.env.PORT) || 3000;
+const httpServer = createServer(app);
 app.use(express.json({ limit: "2mb" }));
+const ocrUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
 const cerebrasApiKey = process.env.CEREBRAS_API_KEY;
 const cerebrasModel = process.env.CEREBRAS_MODEL || "llama3.1-8b";
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+const deepseekModel = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+const deepseekBaseUrl = (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "");
+const llmMaxTokens = Number(process.env.LLM_MAX_TOKENS) || 400;
+const llmProviderOrder = (process.env.LLM_PROVIDER_ORDER || "cerebras,deepseek")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
 const systemPrompt =
   process.env.SYSTEM_PROMPT ||
   "你是中文AI助手。先给结论，再给要点，语言简洁。";
@@ -69,48 +97,344 @@ function buildResumeSummaryFromMarkdown(mdText) {
   return lines.slice(0, 40).join("\n").slice(0, 2000);
 }
 
-// Configure Vite middleware for React client
+// Configure Vite middleware for React client (HMR shares httpServer to avoid port conflicts)
 const vite = await createViteServer({
-  server: { middlewareMode: true },
+  server: {
+    middlewareMode: true,
+    hmr: { server: httpServer },
+  },
   appType: "custom",
 });
 app.use(vite.middlewares);
 
-async function askCerebras(userText, options = {}) {
+function buildChatPrompt(userText, options = {}) {
   const { useResumeContext = false, resumeSummary = "" } = options;
-  if (!cerebrasApiKey) {
-    throw new Error("Missing CEREBRAS_API_KEY");
-  }
   const injectedResume = (resumeSummary || latestResumeSummary || "").trim();
   const shouldUseResume = useResumeContext && injectedResume && isResumeRelated(userText);
-  const prompt = shouldUseResume
+  return shouldUseResume
     ? `${systemPrompt}\n\n补充约束：仅当问题涉及候选人经历时，参考以下简历摘要回答；若是基础通识题，按通用标准答案回答，不要强行套简历。\n\n简历摘要：\n${injectedResume}`
     : systemPrompt;
+}
 
-  const resp = await fetch("https://api.cerebras.ai/v1/chat/completions", {
+function formatLlmError(providerName, status, detail) {
+  const text = (detail || "").trim();
+  if (text.includes("Error 1009") || text.includes("banned the country or region")) {
+    return `${providerName} 请求失败（${status}）：当前 IP 所在地区被限制访问，已尝试备用模型。`;
+  }
+  if (text.startsWith("<!doctype") || text.startsWith("<html")) {
+    return `${providerName} 请求失败（${status}）：服务返回异常页面，已尝试备用模型。`;
+  }
+  const short = text.length > 240 ? `${text.slice(0, 240)}...` : text;
+  return `${providerName} 请求失败（${status}）：${short || "unknown error"}`;
+}
+
+function getProviderCatalog() {
+  return {
+    cerebras: {
+      name: "Cerebras",
+      enabled: Boolean(cerebrasApiKey),
+      url: "https://api.cerebras.ai/v1/chat/completions",
+      apiKey: cerebrasApiKey,
+      model: cerebrasModel,
+    },
+    deepseek: {
+      name: "DeepSeek",
+      enabled: Boolean(deepseekApiKey),
+      url: `${deepseekBaseUrl}/v1/chat/completions`,
+      apiKey: deepseekApiKey,
+      model: deepseekModel,
+    },
+  };
+}
+
+function getOrderedProviders(catalog) {
+  const ordered = [];
+  for (const key of llmProviderOrder) {
+    const provider = catalog[key];
+    if (provider?.enabled) ordered.push({ ...provider });
+  }
+  for (const provider of Object.values(catalog)) {
+    if (provider.enabled && !ordered.some((p) => p.name === provider.name)) {
+      ordered.push({ ...provider });
+    }
+  }
+  return ordered;
+}
+
+function resolveLlmProviders(modelChoice) {
+  const catalog = getProviderCatalog();
+  const choice = (modelChoice || "auto").trim();
+
+  if (!choice || choice === "auto") {
+    return getOrderedProviders(catalog);
+  }
+
+  const sep = choice.indexOf(":");
+  if (sep <= 0) return getOrderedProviders(catalog);
+
+  const providerKey = choice.slice(0, sep).toLowerCase();
+  const modelId = choice.slice(sep + 1).trim();
+  const base = catalog[providerKey];
+  if (!base?.enabled) return [];
+
+  return [{ ...base, model: modelId || base.model }];
+}
+
+function getLlmProviders(modelChoice) {
+  return resolveLlmProviders(modelChoice);
+}
+
+function buildLlmRequestBody(provider, prompt, userText, stream) {
+  const body = {
+    model: provider.model,
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: userText },
+    ],
+    max_tokens: llmMaxTokens,
+  };
+  if (stream) body.stream = true;
+  return body;
+}
+
+async function readSseCompletion(resp, onChunk) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullText = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(data);
+        const chunk = parsed?.choices?.[0]?.delta?.content || "";
+        if (chunk) {
+          fullText += chunk;
+          if (onChunk) onChunk(chunk);
+        }
+      } catch {
+        // ignore malformed chunks
+      }
+    }
+  }
+
+  return fullText.trim();
+}
+
+async function callLlmProvider(provider, userText, options, { stream = false, onChunk } = {}) {
+  const prompt = buildChatPrompt(userText, options);
+  const resp = await fetch(provider.url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${cerebrasApiKey}`,
+      Authorization: `Bearer ${provider.apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: cerebrasModel,
-      messages: [
-        { role: "system", content: prompt },
-        { role: "user", content: userText },
-      ],
-    }),
+    body: JSON.stringify(buildLlmRequestBody(provider, prompt, userText, stream)),
   });
+
   if (!resp.ok) {
     const detail = await resp.text();
-    throw new Error(`Cerebras request failed (${resp.status}): ${detail}`);
+    throw new Error(formatLlmError(provider.name, resp.status, detail));
   }
+
+  if (stream) {
+    return readSseCompletion(resp, onChunk);
+  }
+
   const data = await resp.json();
   return data?.choices?.[0]?.message?.content?.trim() || "";
 }
 
+async function askLlm(userText, options = {}) {
+  const providers = getLlmProviders(options.modelChoice);
+  if (!providers.length) {
+    throw new Error("Missing LLM API key: set CEREBRAS_API_KEY and/or DEEPSEEK_API_KEY");
+  }
+
+  let lastError;
+  for (let i = 0; i < providers.length; i += 1) {
+    const provider = providers[i];
+    try {
+      const answer = await callLlmProvider(provider, userText, options, { stream: false });
+      if (i > 0) {
+        console.log(`LLM fallback succeeded via ${provider.name}`);
+      }
+      return answer;
+    } catch (error) {
+      lastError = error;
+      console.warn(`${provider.name} failed:`, error.message);
+    }
+  }
+  throw lastError;
+}
+
+async function streamLlm(userText, options, onChunk) {
+  const providers = getLlmProviders(options.modelChoice);
+  if (!providers.length) {
+    throw new Error("Missing LLM API key: set CEREBRAS_API_KEY and/or DEEPSEEK_API_KEY");
+  }
+
+  let lastError;
+  for (let i = 0; i < providers.length; i += 1) {
+    const provider = providers[i];
+    try {
+      const answer = await callLlmProvider(provider, userText, options, {
+        stream: true,
+        onChunk,
+      });
+      if (i > 0) {
+        console.log(`LLM fallback succeeded via ${provider.name}`);
+      }
+      return answer;
+    } catch (error) {
+      lastError = error;
+      console.warn(`${provider.name} failed:`, error.message);
+    }
+  }
+  throw lastError;
+}
+
+function makeUserEvent(text, source = "pc") {
+  return {
+    type: "conversation.item.create",
+    event_id: crypto.randomUUID(),
+    item: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+      source,
+    },
+  };
+}
+
+function makeAssistantEvent(text) {
+  return {
+    type: "response.done",
+    event_id: crypto.randomUUID(),
+    response: {
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text }],
+        },
+      ],
+    },
+  };
+}
+
+async function handleSessionChatSend(session, msg) {
+  if (session.busy) {
+    broadcast(session, {
+      type: "system.error",
+      text: "上一条消息仍在处理中，请稍候。",
+    });
+    return;
+  }
+
+  const text = (msg.text || "").trim();
+  if (!text) return;
+
+  session.busy = true;
+  const userEvent = makeUserEvent(text, msg.source || "pc");
+  appendEvent(session, userEvent);
+  broadcast(session, { type: "event.append", event: userEvent });
+
+  const responseId = crypto.randomUUID();
+  try {
+    const answer = await streamLlm(
+      text,
+      {
+        useResumeContext: Boolean(msg.useResumeContext),
+        resumeSummary: msg.resumeSummary || "",
+        modelChoice: msg.modelChoice || "auto",
+      },
+      (chunk) => {
+        broadcast(session, {
+          type: "response.delta",
+          event_id: crypto.randomUUID(),
+          response_id: responseId,
+          delta: { text: chunk },
+        });
+      },
+    );
+
+    const doneEvent = makeAssistantEvent(answer || "未生成回复。");
+    appendEvent(session, doneEvent);
+    broadcast(session, {
+      type: "response.done",
+      response_id: responseId,
+      event: doneEvent,
+    });
+  } catch (error) {
+    console.error("session chat error:", error);
+    const errEvent = makeAssistantEvent(`请求失败：${error.message || error}`);
+    appendEvent(session, errEvent);
+    broadcast(session, {
+      type: "response.done",
+      response_id: responseId,
+      event: errEvent,
+    });
+  } finally {
+    session.busy = false;
+  }
+}
+
+function handleSessionSystemNotify(session, text) {
+  const t = (text || "").trim();
+  if (!t) return;
+  const event = makeAssistantEvent(t);
+  appendEvent(session, event);
+  broadcast(session, { type: "event.append", event });
+}
+
+function handleSessionTranscriptUpdate(session, text) {
+  setLiveTranscript(session, text || "");
+  broadcast(session, { type: "transcript.live", text: session.liveTranscript });
+}
+
+function handleSessionClear(session) {
+  clearSession(session);
+  broadcast(session, { type: "session.clear" });
+}
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.get("/api/network-info", (_req, res) => {
+  res.json(getNetworkInfo(port));
+});
+
+app.post("/api/session", (_req, res) => {
+  const sessionId = createSession();
+  res.json({
+    sessionId,
+    mobilePath: `/m/${sessionId}`,
+    ...getNetworkInfo(port),
+  });
+});
+
+app.get("/api/session/:sessionId", (req, res) => {
+  const session = getSession(req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ error: "session not found" });
+    return;
+  }
+  res.json({
+    sessionId: session.id,
+    eventCount: session.events.length,
+    mobilePath: `/m/${session.id}`,
+  });
 });
 
 app.post("/api/chat-text", async (req, res) => {
@@ -122,11 +446,30 @@ app.post("/api/chat-text", async (req, res) => {
       res.status(400).json({ error: "text is required" });
       return;
     }
-    const answer = await askCerebras(text, { useResumeContext, resumeSummary });
+    const answer = await askLlm(text, {
+      useResumeContext,
+      resumeSummary,
+      modelChoice: req.body?.modelChoice || "auto",
+    });
     res.json({ transcript: text, answer });
   } catch (error) {
     console.error("chat-text error:", error);
     res.status(500).json({ error: "Failed to process text" });
+  }
+});
+
+app.post("/api/ocr", ocrUpload.single("image"), async (req, res) => {
+  try {
+    if (!req.file?.buffer?.length) {
+      res.status(400).json({ error: "请上传图片" });
+      return;
+    }
+    const languageMode = (req.body?.languageMode || "zh-CN").trim();
+    const text = await recognizeImageBuffer(req.file.buffer, languageMode);
+    res.json({ text });
+  } catch (error) {
+    console.error("ocr error:", error);
+    res.status(500).json({ error: error.message || "OCR 识别失败" });
   }
 });
 
@@ -185,7 +528,9 @@ app.post(
         return;
       }
 
-      const answer = await askCerebras(transcript);
+      const answer = await askLlm(transcript, {
+        modelChoice: req.body?.modelChoice || "auto",
+      });
       res.json({ transcript, answer });
     } catch (error) {
       console.error("transcribe-and-answer error:", error);
@@ -213,11 +558,34 @@ app.use("*", async (req, res, next) => {
   }
 });
 
-const httpServer = app.listen(port, () => {
-  console.log(`Express server running on *:${port}`);
+httpServer.listen(port, "0.0.0.0", () => {
+  const network = getNetworkInfo(port);
+  console.log(`Express server running on port ${port}`);
+  if (network.lanIp) {
+    console.log(`  PC:     http://localhost:${port}`);
+    console.log(`  Mobile: http://${network.lanIp}:${port}`);
+  }
 });
 
-const dgWss = new WebSocketServer({ server: httpServer, path: "/ws/deepgram-stt" });
+const dgWss = new WebSocketServer({ noServer: true });
+const sessionWss = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (req, socket, head) => {
+  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+  if (pathname === "/ws/deepgram-stt") {
+    dgWss.handleUpgrade(req, socket, head, (ws) => {
+      dgWss.emit("connection", ws, req);
+    });
+    return;
+  }
+  if (pathname === "/ws/session") {
+    sessionWss.handleUpgrade(req, socket, head, (ws) => {
+      sessionWss.emit("connection", ws, req);
+    });
+    return;
+  }
+  // Vite already handles its own HMR upgrades through hmr.server.
+});
 
 dgWss.on("connection", (clientWs, req) => {
   if (!deepgramApiKey) {
@@ -291,6 +659,62 @@ dgWss.on("connection", (clientWs, req) => {
       } catch {}
       dgWs.close();
     }
+  };
+  clientWs.on("close", cleanup);
+  clientWs.on("error", cleanup);
+});
+
+sessionWss.on("connection", (clientWs, req) => {
+  const requestUrl = new URL(req.url || "/ws/session", "http://localhost");
+  const sessionId = requestUrl.searchParams.get("sessionId");
+  const role = requestUrl.searchParams.get("role") || "pc";
+
+  if (!sessionId) {
+    clientWs.send(JSON.stringify({ type: "error", message: "sessionId is required" }));
+    clientWs.close();
+    return;
+  }
+
+  const session = getSession(sessionId);
+  if (!session) {
+    clientWs.send(JSON.stringify({ type: "error", message: "session not found" }));
+    clientWs.close();
+    return;
+  }
+
+  clientWs.sessionRole = role;
+  addClient(session, clientWs);
+  sendSnapshot(clientWs, session);
+
+  clientWs.on("message", async (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      switch (msg.type) {
+        case "chat.send":
+          await handleSessionChatSend(session, msg);
+          break;
+        case "system.notify":
+          handleSessionSystemNotify(session, msg.text);
+          break;
+        case "transcript.update":
+          handleSessionTranscriptUpdate(session, msg.text);
+          break;
+        case "session.clear":
+          handleSessionClear(session);
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      console.error("session ws message error:", error);
+      clientWs.send(
+        JSON.stringify({ type: "error", message: error.message || "invalid message" }),
+      );
+    }
+  });
+
+  const cleanup = () => {
+    removeClient(session, clientWs);
   };
   clientWs.on("close", cleanup);
   clientWs.on("error", cleanup);

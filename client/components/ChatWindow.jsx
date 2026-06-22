@@ -158,7 +158,6 @@ function normalizeMessage(role, text, imageCount) {
 function buildChatMessages(events) {
   const ordered = [...events].reverse(); // oldest -> newest
   const messages = [];
-  const seen = new Set();
   const keyToIndex = new Map();
   let unknownAudioSeq = 0;
   let unknownAssistantSeq = 0;
@@ -172,9 +171,6 @@ function buildChatMessages(events) {
       messages[idx] = msg;
       return;
     }
-    const dedupe = `${msg.role}|${msg.text}`;
-    if (seen.has(dedupe)) return;
-    seen.add(dedupe);
     keyToIndex.set(key, messages.length);
     messages.push(msg);
   }

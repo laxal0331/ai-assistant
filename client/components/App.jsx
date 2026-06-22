@@ -2,8 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import logo from "/assets/openai-logomark.svg";
 import ChatWindow from "./ChatWindow";
 import SessionControls from "./SessionControls";
+import MobileSyncPanel from "./MobileSyncPanel";
+import SessionToolbar from "./SessionToolbar";
+import { useSessionSync } from "../hooks/useSessionSync";
+import { loadLlmModelChoice, saveLlmModelChoice } from "../lib/llmModels";
+import { recognizeImageFile } from "../lib/ocrClient";
 
 const TARGET_SR = 16000;
+const SYNC_SESSION_KEY = "sync_session_id";
 
 function downsampleTo16k(input, inputRate) {
   if (inputRate === TARGET_SR) return input;
@@ -36,13 +42,24 @@ function floatToInt16Bytes(float32) {
 
 export default function App() {
   const [isSessionActive, setIsSessionActive] = useState(false);
-  const [events, setEvents] = useState([]);
   const [autoSendEnabled, setAutoSendEnabled] = useState(true);
-  const [liveTranscript, setLiveTranscript] = useState("");
   const [minSendChars, setMinSendChars] = useState(6);
   const [languageMode, setLanguageMode] = useState("zh-CN");
   const [useResumeContext, setUseResumeContext] = useState(false);
   const [resumeSummary, setResumeSummary] = useState("");
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [llmModelChoice, setLlmModelChoice] = useState(() => loadLlmModelChoice());
+  const [composerBusy, setComposerBusy] = useState(false);
+
+  const sync = useSessionSync({
+    role: "pc",
+    onSessionInvalid: () => {
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(SYNC_SESSION_KEY);
+      }
+    },
+  });
+  const llmModelChoiceRef = useRef(loadLlmModelChoice());
 
   const captureStream = useRef(null);
   const audioContextRef = useRef(null);
@@ -56,44 +73,17 @@ export default function App() {
   const minSendCharsRef = useRef(6);
   const chatScrollContainer = useRef(null);
   const activeAudioSourceRef = useRef("none");
-
-  function addUserEvent(text) {
-    setEvents((prev) => [{
-      type: "conversation.item.create",
-      event_id: crypto.randomUUID(),
-      item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
-    }, ...prev]);
-  }
-
-  function addAssistantEvent(text) {
-    setEvents((prev) => [{
-      type: "response.done",
-      event_id: crypto.randomUUID(),
-      response: {
-        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
-      },
-    }, ...prev]);
-  }
+  const transcriptSyncTimerRef = useRef(null);
 
   async function sendToCerebras(text) {
     const t = text.trim();
     if (!t) return;
-    addUserEvent(t);
-    const response = await fetch("/api/chat-text", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: t,
-        useResumeContext,
-        resumeSummary,
-      }),
+    await sync.sendChat(t, {
+      useResumeContext,
+      resumeSummary,
+      source: "pc",
+      modelChoice: llmModelChoiceRef.current,
     });
-    if (!response.ok) {
-      addAssistantEvent(`请求失败（${response.status}）`);
-      return;
-    }
-    const data = await response.json();
-    addAssistantEvent(data.answer || "未生成回复。");
   }
 
   function getCurrentTranscript() {
@@ -102,6 +92,15 @@ export default function App() {
 
   function countEffectiveChars(text) {
     return text.replace(/\s+/g, "").length;
+  }
+
+  function pushLiveTranscript(text) {
+    if (transcriptSyncTimerRef.current) {
+      clearTimeout(transcriptSyncTimerRef.current);
+    }
+    transcriptSyncTimerRef.current = setTimeout(() => {
+      sync.sendTranscript(text).catch(() => {});
+    }, 150);
   }
 
   function scheduleAutoSend() {
@@ -113,7 +112,7 @@ export default function App() {
       if (countEffectiveChars(text) < minSendCharsRef.current) return;
       finalTextRef.current = "";
       partialTextRef.current = "";
-      setLiveTranscript("");
+      pushLiveTranscript("");
       await sendToCerebras(text);
     }, 800);
   }
@@ -130,11 +129,11 @@ export default function App() {
       try {
         const msg = JSON.parse(evt.data);
         if (msg.type === "error") {
-          addAssistantEvent(`转写通道错误: ${msg.message || "unknown error"}`);
+          sync.sendSystem(`转写通道错误: ${msg.message || "unknown error"}`).catch(() => {});
           return;
         }
         if (msg.type === "ready") {
-          addAssistantEvent(`转写通道已连接（语言: ${lang}）。`);
+          sync.sendSystem(`转写通道已连接（语言: ${lang}）。`).catch(() => {});
           return;
         }
         if (msg.type !== "transcript") return;
@@ -145,7 +144,7 @@ export default function App() {
         } else {
           partialTextRef.current = msg.text || "";
         }
-        setLiveTranscript(getCurrentTranscript());
+        pushLiveTranscript(getCurrentTranscript());
       } catch {
         // ignore parse errors
       }
@@ -156,8 +155,19 @@ export default function App() {
 
   async function startSession(options = {}) {
     const { audioSource = "none" } = options;
+    if (
+      ["screen", "mic"].includes(audioSource) &&
+      (!window.isSecureContext || !navigator.mediaDevices)
+    ) {
+      throw new Error(
+        "浏览器阻止了音频权限。请在这台电脑上使用 http://localhost:3000 打开；局域网 IP 的 HTTP 页面只能使用文字模式。",
+      );
+    }
     activeAudioSourceRef.current = audioSource;
-    setEvents([]);
+    const sessionId = await sync.clearSession();
+    if (sessionId) {
+      window.localStorage.setItem(SYNC_SESSION_KEY, sessionId);
+    }
 
     if (audioSource === "none") {
       setIsSessionActive(true);
@@ -240,12 +250,50 @@ export default function App() {
 
     finalTextRef.current = "";
     partialTextRef.current = "";
-    setLiveTranscript("");
+    pushLiveTranscript("");
     setIsSessionActive(false);
   }
 
+  async function sendMessageWithImages({ text = "", files = [] } = {}) {
+    const trimmed = text.trim();
+    const imageFiles = Array.isArray(files) ? files.filter(Boolean) : [];
+    if (!trimmed && imageFiles.length === 0) return;
+
+    setComposerBusy(true);
+    try {
+      if (!isSessionActive) {
+        await startSession({ audioSource: "none" });
+      }
+
+      const ocrTexts = [];
+      for (let i = 0; i < imageFiles.length; i += 1) {
+        const ocrText = await recognizeImageFile(imageFiles[i], languageMode);
+        ocrTexts.push(ocrText);
+      }
+
+      const parts = [];
+      if (trimmed) parts.push(trimmed);
+      if (ocrTexts.length) {
+        const body = ocrTexts
+          .map((ocrText, index) =>
+            ocrTexts.length > 1 ? `图${index + 1}:\n${ocrText}` : ocrText,
+          )
+          .join("\n\n");
+        parts.push(`【图片识别内容】\n${body}`);
+      }
+
+      await sendToCerebras(parts.join("\n\n"));
+    } catch (error) {
+      const message = error?.message || String(error);
+      window.alert(message);
+      sync.sendSystem(`图片识别失败：${message}`).catch(() => {});
+    } finally {
+      setComposerBusy(false);
+    }
+  }
+
   async function sendTextMessage(message) {
-    await sendToCerebras(message);
+    await sendMessageWithImages({ text: message, files: [] });
   }
 
   async function uploadResumeMd(file) {
@@ -256,29 +304,54 @@ export default function App() {
       body: JSON.stringify({ content: text }),
     });
     if (!response.ok) {
-      addAssistantEvent(`简历上传失败（${response.status}）`);
+      sync.sendSystem(`简历上传失败（${response.status}）`).catch(() => {});
       return;
     }
     const data = await response.json();
     setResumeSummary(data.summary || "");
     setUseResumeContext(true);
-    addAssistantEvent("简历已上传并生成摘要，已开启简历上下文。");
+    sync.sendSystem("简历已上传并生成摘要，已开启简历上下文。").catch(() => {});
   }
 
   async function submitTranscript() {
     const text = getCurrentTranscript();
     if (!text) {
-      addAssistantEvent("暂无可发送转写，请先播放系统音频。");
+      sync.sendSystem("暂无可发送转写，请先播放系统音频。").catch(() => {});
       return;
     }
     if (countEffectiveChars(text) < minSendChars) {
-      addAssistantEvent(`转写字数不足 ${minSendChars}，已拦截发送。`);
+      sync.sendSystem(`转写字数不足 ${minSendChars}，已拦截发送。`).catch(() => {});
       return;
     }
     finalTextRef.current = "";
     partialTextRef.current = "";
-    setLiveTranscript("");
+    pushLiveTranscript("");
     await sendToCerebras(text);
+  }
+
+  async function openMobileSync() {
+    setMobilePanelOpen(true);
+    try {
+      if (sync.sessionId) {
+        await sync.ensureSession();
+      } else {
+        const saved = window.localStorage.getItem(SYNC_SESSION_KEY);
+        if (saved) {
+          await sync.restoreSession(saved);
+        }
+      }
+    } catch (error) {
+      console.error("mobile sync connect failed:", error);
+    }
+  }
+
+  async function createOrRefreshMobileSession() {
+    try {
+      const id = await sync.createSession();
+      window.localStorage.setItem(SYNC_SESSION_KEY, id);
+    } catch (error) {
+      window.alert(error?.message || String(error));
+    }
   }
 
   useEffect(() => {
@@ -286,6 +359,10 @@ export default function App() {
     const saved = window.localStorage.getItem("auto_send_enabled");
     if (saved !== null) {
       setAutoSendEnabled(saved === "true");
+    }
+    const savedSession = window.localStorage.getItem(SYNC_SESSION_KEY);
+    if (savedSession) {
+      sync.restoreSession(savedSession).catch(() => {});
     }
   }, []);
 
@@ -300,7 +377,11 @@ export default function App() {
   }, [minSendChars]);
 
   useEffect(() => {
-    // Hot-switch language config during active screen-audio session.
+    llmModelChoiceRef.current = llmModelChoice;
+    saveLlmModelChoice(llmModelChoice);
+  }, [llmModelChoice]);
+
+  useEffect(() => {
     if (!isSessionActive) return;
     if (!["screen", "mic"].includes(activeAudioSourceRef.current)) return;
     if (!captureStream.current) return;
@@ -314,44 +395,65 @@ export default function App() {
     if (chatScrollContainer.current) {
       chatScrollContainer.current.scrollTop = chatScrollContainer.current.scrollHeight;
     }
-  }, [events]);
+  }, [sync.events]);
 
   return (
-    <>
-      <nav className="absolute top-0 left-0 right-0 h-16 flex items-center">
-        <div className="flex items-center gap-4 w-full m-4 pb-2 border-0 border-b border-solid border-gray-200">
-          <img style={{ width: "24px" }} src={logo} />
-          <h1>realtime console</h1>
-        </div>
-      </nav>
-      <main className="absolute top-16 left-0 right-0 bottom-0">
-        <section className="absolute top-0 left-0 right-0 bottom-0 flex">
-          <section ref={chatScrollContainer} className="absolute top-0 left-0 right-0 bottom-32 px-4 overflow-y-auto">
-            <ChatWindow events={events} />
-          </section>
-          <section className="absolute h-32 left-0 right-0 bottom-0 p-4">
-            <SessionControls
-              startSession={startSession}
-              stopSession={stopSession}
-              sendTextMessage={sendTextMessage}
-              submitTranscript={submitTranscript}
+    <div className="h-screen flex flex-col overflow-hidden">
+      <nav className="shrink-0 z-10 bg-[var(--color-base)]">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 w-full px-4 py-3 border-0 border-b border-solid border-gray-200">
+          <img style={{ width: "24px" }} src={logo} alt="" className="shrink-0" />
+          <h1 className="shrink-0">realtime console</h1>
+          <div className="flex flex-wrap items-center gap-2 ml-auto shrink-0">
+            <SessionToolbar
+              llmModelChoice={llmModelChoice}
+              setLlmModelChoice={setLlmModelChoice}
               isSessionActive={isSessionActive}
-              autoSendEnabled={autoSendEnabled}
-              setAutoSendEnabled={setAutoSendEnabled}
-              liveTranscript={liveTranscript}
               minSendChars={minSendChars}
               setMinSendChars={setMinSendChars}
               languageMode={languageMode}
               setLanguageMode={setLanguageMode}
-              useResumeContext={useResumeContext}
-              setUseResumeContext={setUseResumeContext}
-              resumeSummary={resumeSummary}
-              setResumeSummary={setResumeSummary}
-              uploadResumeMd={uploadResumeMd}
+              liveTranscript={sync.liveTranscript}
             />
-          </section>
+            <button
+              type="button"
+              onClick={openMobileSync}
+              className="text-sm px-3 py-1.5 rounded-full bg-teal-600 text-white hover:bg-teal-700 shrink-0"
+            >
+              手机同步
+            </button>
+          </div>
+        </div>
+      </nav>
+      <MobileSyncPanel
+        open={mobilePanelOpen}
+        onClose={() => setMobilePanelOpen(false)}
+        sessionId={sync.sessionId}
+        connected={sync.connected}
+        connectionError={sync.connectionError}
+        onCreateOrOpen={createOrRefreshMobileSession}
+      />
+      <main className="flex-1 min-h-0 flex flex-col">
+        <section ref={chatScrollContainer} className="flex-1 min-h-0 px-4 py-2 overflow-y-auto">
+          <ChatWindow events={sync.events} />
+        </section>
+        <section className="shrink-0 min-h-28 max-h-[45vh] px-4 pb-4 overflow-y-auto">
+          <SessionControls
+            startSession={startSession}
+            stopSession={stopSession}
+            sendMessageWithImages={sendMessageWithImages}
+            submitTranscript={submitTranscript}
+            isSessionActive={isSessionActive}
+            autoSendEnabled={autoSendEnabled}
+            setAutoSendEnabled={setAutoSendEnabled}
+            useResumeContext={useResumeContext}
+            setUseResumeContext={setUseResumeContext}
+            resumeSummary={resumeSummary}
+            setResumeSummary={setResumeSummary}
+            uploadResumeMd={uploadResumeMd}
+            composerBusy={composerBusy}
+          />
         </section>
       </main>
-    </>
+    </div>
   );
 }

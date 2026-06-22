@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { CloudLightning, CloudOff, MessageSquare, Monitor } from "react-feather";
+import { CloudLightning, CloudOff, Monitor } from "react-feather";
 import Button from "./Button";
+import ChatComposer from "./ChatComposer";
 
 function SessionStopped({ startSession, uploadResumeMd, useResumeContext, setUseResumeContext }) {
   const [isActivating, setIsActivating] = useState(false);
@@ -20,30 +21,30 @@ function SessionStopped({ startSession, uploadResumeMd, useResumeContext, setUse
   }
 
   return (
-    <div className="w-full h-full flex flex-col justify-center gap-3">
-      <div className="w-full flex items-center justify-center gap-4">
-        <Button
-          onClick={() => handleStartSession({ audioSource: "none" })}
-          className={isActivating ? "bg-gray-600" : "bg-red-600"}
-          icon={<CloudLightning height={16} />}
-        >
-          {isActivating ? "starting..." : "开始（仅文本）"}
-        </Button>
+    <div className="w-full flex flex-col items-center justify-center gap-4 px-4 py-3">
+      <div className="flex w-full flex-wrap items-center justify-center gap-3">
         <Button
           onClick={() => handleStartSession({ audioSource: "screen" })}
-          className={isActivating ? "bg-gray-600" : "bg-green-600"}
+          className={`${isActivating ? "bg-gray-600" : "bg-green-600"} whitespace-nowrap`}
           icon={<Monitor height={16} />}
         >
           {isActivating ? "starting..." : "共享桌面（系统音频）"}
         </Button>
         <Button
           onClick={() => handleStartSession({ audioSource: "mic" })}
-          className={isActivating ? "bg-gray-600" : "bg-indigo-600"}
+          className={`${isActivating ? "bg-gray-600" : "bg-indigo-600"} whitespace-nowrap`}
         >
           {isActivating ? "starting..." : "麦克风输入"}
         </Button>
+        <Button
+          onClick={() => handleStartSession({ audioSource: "none" })}
+          className={`${isActivating ? "bg-gray-600" : "bg-red-600"} whitespace-nowrap`}
+          icon={<CloudLightning height={16} />}
+        >
+          {isActivating ? "starting..." : "开始（仅文本）"}
+        </Button>
       </div>
-      <div className="w-full flex items-center justify-end gap-3 pr-2">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
         <label className="text-xs whitespace-nowrap flex items-center gap-1">
           <input
             type="checkbox"
@@ -62,7 +63,7 @@ function SessionStopped({ startSession, uploadResumeMd, useResumeContext, setUse
               if (file) uploadResumeMd(file);
               e.target.value = "";
             }}
-            className="text-xs w-[170px]"
+            className="text-xs max-w-[170px]"
           />
         </label>
       </div>
@@ -72,134 +73,46 @@ function SessionStopped({ startSession, uploadResumeMd, useResumeContext, setUse
 
 function SessionActive({
   stopSession,
-  sendTextMessage,
+  sendMessageWithImages,
   submitTranscript,
   autoSendEnabled,
   setAutoSendEnabled,
-  liveTranscript,
-  minSendChars,
-  setMinSendChars,
-  languageMode,
-  setLanguageMode,
-  useResumeContext,
-  setUseResumeContext,
   resumeSummary,
   setResumeSummary,
-  uploadResumeMd,
+  composerBusy,
 }) {
-  const [message, setMessage] = useState("");
-  const [langMenuOpen, setLangMenuOpen] = useState(false);
-  const languageLabelMap = {
-    "zh-CN": "中文",
-    en: "英文",
-    ja: "日语",
-  };
-
-  function handleSendText() {
-    sendTextMessage(message);
-    setMessage("");
-  }
-
   return (
-    <div className="flex items-center justify-center w-full h-full gap-3">
-      <input
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && message.trim()) handleSendText();
-        }}
-        type="text"
-        placeholder="send a text message..."
-        className="border border-gray-200 rounded-full p-3 flex-1"
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-      />
-      <Button
-        onClick={() => {
-          if (message.trim()) handleSendText();
-        }}
-        icon={<MessageSquare height={16} />}
-        className="bg-blue-500"
-      >
-        发送文本
-      </Button>
-      <Button onClick={submitTranscript} className="bg-purple-600">
-        发送当前转写
-      </Button>
-      <Button onClick={stopSession} icon={<CloudOff height={16} />}>
-        断开
-      </Button>
-      <label className="text-xs whitespace-nowrap flex items-center gap-1">
+    <div className="w-full flex items-center gap-3 px-4 py-3 min-w-0 overflow-x-auto">
+      <div className="flex-1 min-w-[280px]">
+        <ChatComposer compact onSend={sendMessageWithImages} busy={composerBusy} />
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <label className="text-xs whitespace-nowrap flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={autoSendEnabled}
+            onChange={(e) => setAutoSendEnabled(e.target.checked)}
+          />
+          静音800ms自动发送
+        </label>
+        <Button onClick={submitTranscript} className="bg-purple-600 !p-2.5 text-xs whitespace-nowrap">
+          发送当前转写
+        </Button>
         <input
-          type="checkbox"
-          checked={autoSendEnabled}
-          onChange={(e) => setAutoSendEnabled(e.target.checked)}
+          type="text"
+          value={resumeSummary}
+          onChange={(e) => setResumeSummary(e.target.value)}
+          placeholder="参考资料摘要（可编辑）"
+          className="border border-gray-300 rounded-lg px-2.5 py-2 text-xs w-44"
         />
-        静音800ms自动发送
-      </label>
-      <label className="text-xs whitespace-nowrap flex items-center gap-1">
-        最小字数
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={minSendChars}
-          onChange={(e) => setMinSendChars(Math.max(1, Number(e.target.value) || 1))}
-          className="w-14 border border-gray-300 rounded px-1 py-0.5"
-        />
-      </label>
-      <div className="text-xs whitespace-nowrap flex items-center gap-1 relative">
-        <span>语言:</span>
-        <button
-          type="button"
-          className="px-2 py-1 rounded bg-gray-200 min-w-[88px] text-left"
-          onClick={() => setLangMenuOpen((v) => !v)}
+        <Button
+          onClick={stopSession}
+          icon={<CloudOff height={16} />}
+          className="!p-2.5 text-xs whitespace-nowrap"
         >
-          {languageLabelMap[languageMode]} ▾
-        </button>
-        {langMenuOpen ? (
-          <div className="absolute bottom-8 left-8 z-20 bg-white border border-gray-300 rounded shadow-md flex flex-col">
-            <button
-              type="button"
-              className={`px-3 py-1 text-left ${languageMode === "zh-CN" ? "bg-blue-600 text-white" : "hover:bg-gray-100"}`}
-              onClick={() => {
-                setLanguageMode("zh-CN");
-                setLangMenuOpen(false);
-              }}
-            >
-              中文
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1 text-left ${languageMode === "en" ? "bg-blue-600 text-white" : "hover:bg-gray-100"}`}
-              onClick={() => {
-                setLanguageMode("en");
-                setLangMenuOpen(false);
-              }}
-            >
-              英文
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1 text-left ${languageMode === "ja" ? "bg-blue-600 text-white" : "hover:bg-gray-100"}`}
-              onClick={() => {
-                setLanguageMode("ja");
-                setLangMenuOpen(false);
-              }}
-            >
-              日语
-            </button>
-          </div>
-        ) : null}
+          断开
+        </Button>
       </div>
-      <div className="text-xs text-gray-600 max-w-[240px] truncate" title={liveTranscript}>
-        转写: {liveTranscript || "(等待语音)"}
-      </div>
-      <input
-        type="text"
-        value={resumeSummary}
-        onChange={(e) => setResumeSummary(e.target.value)}
-        placeholder="参考资料摘要（可编辑）"
-        className="border border-gray-300 rounded px-2 py-1 text-xs w-[220px]"
-      />
     </div>
   );
 }
@@ -207,41 +120,30 @@ function SessionActive({
 export default function SessionControls({
   startSession,
   stopSession,
-  sendTextMessage,
+  sendMessageWithImages,
   submitTranscript,
   isSessionActive,
   autoSendEnabled,
   setAutoSendEnabled,
-  liveTranscript,
-  minSendChars,
-  setMinSendChars,
-  languageMode,
-  setLanguageMode,
   useResumeContext,
   setUseResumeContext,
   resumeSummary,
   setResumeSummary,
   uploadResumeMd,
+  composerBusy,
 }) {
   return (
-    <div className="flex gap-4 border-t-2 border-gray-200 h-full rounded-md">
+    <div className="w-full h-full min-w-0 border-t-2 border-gray-200 rounded-md">
       {isSessionActive ? (
         <SessionActive
           stopSession={stopSession}
-          sendTextMessage={sendTextMessage}
+          sendMessageWithImages={sendMessageWithImages}
           submitTranscript={submitTranscript}
           autoSendEnabled={autoSendEnabled}
           setAutoSendEnabled={setAutoSendEnabled}
-          liveTranscript={liveTranscript}
-          minSendChars={minSendChars}
-          setMinSendChars={setMinSendChars}
-          languageMode={languageMode}
-          setLanguageMode={setLanguageMode}
-          useResumeContext={useResumeContext}
-          setUseResumeContext={setUseResumeContext}
           resumeSummary={resumeSummary}
           setResumeSummary={setResumeSummary}
-          uploadResumeMd={uploadResumeMd}
+          composerBusy={composerBusy}
         />
       ) : (
         <SessionStopped
