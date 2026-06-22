@@ -4,7 +4,7 @@ export const LLM_MODEL_OPTIONS = [
   { value: "deepseek:deepseek-v4-pro", label: "DeepSeek V4 Pro" },
 ];
 
-export const LLM_MODEL_STORAGE_KEY = "llm_model_choice";
+const LLM_MODEL_STORAGE_KEY = "llm_model_choice";
 
 export function getLlmModelLabel(value) {
   return LLM_MODEL_OPTIONS.find((o) => o.value === value)?.label || value;

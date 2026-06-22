@@ -5,7 +5,7 @@
     "start": "node server.js",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build --outDir dist/client --ssrManifest",
-    "build:server": "vite build --outDir dist/server --ssr /index.js",
+    "build:server": "vite build --outDir dist/server --ssr /entry-server.jsx",
     "devinstall": "zx ../../devinstall.mjs -- node server.js --dev",
     "lint": "eslint . --ext .js,.jsx --fix"
   },
@@ -15,15 +15,11 @@
     "@alicloud/tea-util": "^1.4.11",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "history": "^5.3.0",
-    "minipass": "^7.0.4",
     "multer": "^2.2.0",
-    "pdf-parse": "^2.4.5",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-feather": "^2.0.10",
-    "react-router-dom": "^6.20.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {

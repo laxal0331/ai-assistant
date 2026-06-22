@@ -69,7 +69,7 @@ function extractTextFromPayload(payload) {
   return "";
 }
 
-export function mapLanguageModeToOcrLanguages(languageMode) {
+function mapLanguageModeToOcrLanguages(languageMode) {
   return (LANGUAGE_MAP[languageMode] || LANGUAGE_MAP["zh-CN"]).join(",");
 }
 

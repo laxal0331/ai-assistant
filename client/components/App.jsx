@@ -75,7 +75,7 @@ export default function App() {
   const activeAudioSourceRef = useRef("none");
   const transcriptSyncTimerRef = useRef(null);
 
-  async function sendToCerebras(text) {
+  async function sendToLlm(text) {
     const t = text.trim();
     if (!t) return;
     await sync.sendChat(t, {
@@ -113,7 +113,7 @@ export default function App() {
       finalTextRef.current = "";
       partialTextRef.current = "";
       pushLiveTranscript("");
-      await sendToCerebras(text);
+      await sendToLlm(text);
     }, 800);
   }
 
@@ -282,7 +282,7 @@ export default function App() {
         parts.push(`【图片识别内容】\n${body}`);
       }
 
-      await sendToCerebras(parts.join("\n\n"));
+      await sendToLlm(parts.join("\n\n"));
     } catch (error) {
       const message = error?.message || String(error);
       window.alert(message);
@@ -290,10 +290,6 @@ export default function App() {
     } finally {
       setComposerBusy(false);
     }
-  }
-
-  async function sendTextMessage(message) {
-    await sendMessageWithImages({ text: message, files: [] });
   }
 
   async function uploadResumeMd(file) {
@@ -326,7 +322,7 @@ export default function App() {
     finalTextRef.current = "";
     partialTextRef.current = "";
     pushLiveTranscript("");
-    await sendToCerebras(text);
+    await sendToLlm(text);
   }
 
   async function openMobileSync() {

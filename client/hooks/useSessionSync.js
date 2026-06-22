@@ -300,7 +300,6 @@ export function useSessionSync({
 
   return {
     sessionId,
-    setSessionId,
     events,
     liveTranscript,
     connected,
@@ -308,8 +307,6 @@ export function useSessionSync({
     createSession,
     ensureSession,
     restoreSession,
-    connectWs,
-    invalidateSession,
     sendChat,
     sendSystem,
     sendTranscript,

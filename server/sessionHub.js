@@ -38,10 +38,10 @@ export function removeClient(session, ws) {
   session.clients.delete(ws);
 }
 
-export function broadcast(session, message, excludeWs = null) {
+export function broadcast(session, message) {
   const payload = JSON.stringify(message);
   for (const client of session.clients) {
-    if (client !== excludeWs && client.readyState === WebSocket.OPEN) {
+    if (client.readyState === WebSocket.OPEN) {
       client.send(payload);
     }
   }

@@ -18,7 +18,6 @@ export default function ChatComposer({
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState([]);
   const fileInputRef = useRef(null);
-  const textareaRef = useRef(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
 
@@ -127,7 +126,6 @@ export default function ChatComposer({
         </button>
 
         <textarea
-          ref={textareaRef}
           value={message}
           disabled={disabled || busy}
           onChange={(e) => setMessage(e.target.value)}

@@ -180,10 +180,6 @@ function resolveLlmProviders(modelChoice) {
   return [{ ...base, model: modelId || base.model }];
 }
 
-function getLlmProviders(modelChoice) {
-  return resolveLlmProviders(modelChoice);
-}
-
 function buildLlmRequestBody(provider, prompt, userText, stream) {
   const body = {
     model: provider.model,
@@ -255,7 +251,7 @@ async function callLlmProvider(provider, userText, options, { stream = false, on
 }
 
 async function askLlm(userText, options = {}) {
-  const providers = getLlmProviders(options.modelChoice);
+  const providers = resolveLlmProviders(options.modelChoice);
   if (!providers.length) {
     throw new Error("Missing LLM API key: set CEREBRAS_API_KEY and/or DEEPSEEK_API_KEY");
   }
@@ -278,7 +274,7 @@ async function askLlm(userText, options = {}) {
 }
 
 async function streamLlm(userText, options, onChunk) {
-  const providers = getLlmProviders(options.modelChoice);
+  const providers = resolveLlmProviders(options.modelChoice);
   if (!providers.length) {
     throw new Error("Missing LLM API key: set CEREBRAS_API_KEY and/or DEEPSEEK_API_KEY");
   }

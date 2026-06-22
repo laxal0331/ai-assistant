@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 function safeString(v) {
   return typeof v === "string" ? v : "";
@@ -286,16 +286,9 @@ function buildChatMessages(events) {
 
 export default function ChatWindow({ events }) {
   const messages = useMemo(() => buildChatMessages(events || []), [events]);
-  const containerRef = useRef(null);
-
-  useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [messages]);
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-3 overflow-y-auto">
+    <div className="flex flex-col gap-3">
       {messages.length === 0 ? (
         <div className="text-gray-500">开始会话后，聊天内容会在这里显示。</div>
       ) : (
@@ -319,4 +312,3 @@ export default function ChatWindow({ events }) {
     </div>
   );
 }
-

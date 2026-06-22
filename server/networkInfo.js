@@ -4,7 +4,7 @@ function isPrivateIpv4(ip) {
   return /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(ip);
 }
 
-export function getLanIpv4() {
+function getLanIpv4() {
   const interfaces = os.networkInterfaces();
   const candidates = [];
 
