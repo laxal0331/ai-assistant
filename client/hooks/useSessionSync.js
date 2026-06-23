@@ -53,6 +53,7 @@ export function useSessionSync({
   const [liveTranscript, setLiveTranscript] = useState("");
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState("");
+  const [usage, setUsage] = useState(null);
   const wsRef = useRef(null);
   const sessionIdRef = useRef(externalSessionId);
   const reconnectTimerRef = useRef(null);
@@ -64,7 +65,22 @@ export function useSessionSync({
   }, [onSessionInvalid]);
 
   const handleMessage = useCallback((msg) => {
+    if (msg?.type === "usage.update" && msg.usage) {
+      setUsage(msg.usage);
+    }
     applySyncMessage(setEvents, setLiveTranscript, msg);
+  }, []);
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      const resp = await fetch("/api/usage");
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      setUsage(data);
+      return data;
+    } catch {
+      return null;
+    }
   }, []);
 
   const invalidateSession = useCallback((message = "") => {
@@ -225,6 +241,7 @@ export function useSessionSync({
         useResumeContext: Boolean(options.useResumeContext),
         resumeSummary: options.resumeSummary || "",
         source: options.source || role,
+        imageCount: options.imageCount || 0,
         modelChoice: options.modelChoice || "auto",
       });
     },
@@ -298,12 +315,18 @@ export function useSessionSync({
     };
   }, [externalSessionId, connectWs, validateSession]);
 
+  useEffect(() => {
+    refreshUsage();
+  }, [refreshUsage]);
+
   return {
     sessionId,
     events,
     liveTranscript,
     connected,
     connectionError,
+    usage,
+    refreshUsage,
     createSession,
     ensureSession,
     restoreSession,

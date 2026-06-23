@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import logo from "/assets/openai-logomark.svg";
+import logo from "/assets/app-icon.png";
 import ChatWindow from "./ChatWindow";
 import SessionControls from "./SessionControls";
 import MobileSyncPanel from "./MobileSyncPanel";
-import SessionToolbar from "./SessionToolbar";
+import SettingsPanel from "./SettingsPanel";
 import { useSessionSync } from "../hooks/useSessionSync";
 import { loadLlmModelChoice, saveLlmModelChoice } from "../lib/llmModels";
 import { recognizeImageFile } from "../lib/ocrClient";
+import { computeChatCreditCost } from "../lib/usageCost";
+import { buildLlmUserMessage } from "../lib/buildLlmUserMessage";
+import { keyboardEventToAccelerator } from "../lib/screenshotHotkey";
 
 const TARGET_SR = 16000;
 const SYNC_SESSION_KEY = "sync_session_id";
@@ -48,6 +51,7 @@ export default function App() {
   const [useResumeContext, setUseResumeContext] = useState(false);
   const [resumeSummary, setResumeSummary] = useState("");
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [llmModelChoice, setLlmModelChoice] = useState(() => loadLlmModelChoice());
   const [composerBusy, setComposerBusy] = useState(false);
 
@@ -76,7 +80,7 @@ export default function App() {
   const transcriptSyncTimerRef = useRef(null);
   const sendMessageWithImagesRef = useRef(null);
 
-  async function sendToLlm(text) {
+  async function sendToLlm(text, options = {}) {
     const t = text.trim();
     if (!t) return;
     await sync.sendChat(t, {
@@ -84,7 +88,22 @@ export default function App() {
       resumeSummary,
       source: "pc",
       modelChoice: llmModelChoiceRef.current,
+      imageCount: Math.max(0, Number(options.imageCount) || 0),
     });
+  }
+
+  async function ensureEnoughCredits(imageCount = 0) {
+    const cost = computeChatCreditCost({ imageCount, useResumeContext });
+    let usage = sync.usage;
+    if (!usage) {
+      usage = await sync.refreshUsage();
+    }
+    if (usage?.enabled && usage.remaining < cost) {
+      throw new Error(
+        `次数不足（需要 ${cost} 次，剩余 ${usage.remaining} 次）。请在设置中兑换充值码或联系管理员加次数。`,
+      );
+    }
+    return cost;
   }
 
   function getCurrentTranscript() {
@@ -157,7 +176,7 @@ export default function App() {
   async function startSession(options = {}) {
     const { audioSource = "none" } = options;
     if (
-      ["screen", "mic"].includes(audioSource) &&
+      ["system", "mic"].includes(audioSource) &&
       (!window.isSecureContext || !navigator.mediaDevices)
     ) {
       throw new Error(
@@ -176,10 +195,20 @@ export default function App() {
     }
 
     let stream;
-    if (audioSource === "screen") {
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    if (audioSource === "system") {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+      });
+      stream.getVideoTracks().forEach((track) => {
+        track.stop();
+      });
       if (!stream.getAudioTracks().length) {
-        throw new Error("未捕获到系统音频，请在授权弹窗中勾选系统音频");
+        throw new Error(
+          window.desktopApp?.isDesktopApp
+            ? "未捕获到系统音频，请确认 Windows 允许本应用录制系统声音。"
+            : "未捕获到系统音频，请在浏览器共享弹窗中勾选「共享系统音频」。",
+        );
       }
     } else if (audioSource === "mic") {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -255,7 +284,7 @@ export default function App() {
     setIsSessionActive(false);
   }
 
-  async function sendMessageWithImages({ text = "", files = [] } = {}) {
+  async function sendMessageWithImages({ text = "", files = [], ocrTexts = null } = {}) {
     const trimmed = text.trim();
     const imageFiles = Array.isArray(files) ? files.filter(Boolean) : [];
     if (!trimmed && imageFiles.length === 0) return;
@@ -266,24 +295,19 @@ export default function App() {
         await startSession({ audioSource: "none" });
       }
 
-      const ocrTexts = [];
-      for (let i = 0; i < imageFiles.length; i += 1) {
-        const ocrText = await recognizeImageFile(imageFiles[i], languageMode);
-        ocrTexts.push(ocrText);
+      await ensureEnoughCredits(imageFiles.length);
+
+      let resolvedOcrTexts = Array.isArray(ocrTexts) ? ocrTexts : null;
+      if (imageFiles.length && !resolvedOcrTexts) {
+        resolvedOcrTexts = await Promise.all(
+          imageFiles.map((file) => recognizeImageFile(file, languageMode)),
+        );
       }
 
-      const parts = [];
-      if (trimmed) parts.push(trimmed);
-      if (ocrTexts.length) {
-        const body = ocrTexts
-          .map((ocrText, index) =>
-            ocrTexts.length > 1 ? `图${index + 1}:\n${ocrText}` : ocrText,
-          )
-          .join("\n\n");
-        parts.push(`【图片识别内容】\n${body}`);
-      }
+      const llmText = buildLlmUserMessage(trimmed, resolvedOcrTexts || []);
+      if (!llmText) return;
 
-      await sendToLlm(parts.join("\n\n"));
+      await sendToLlm(llmText, { imageCount: imageFiles.length });
     } catch (error) {
       const message = error?.message || String(error);
       window.alert(message);
@@ -365,6 +389,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !window.desktopApp?.isDesktopApp) return undefined;
+    function onKeyDown(event) {
+      const info = window.desktopApp.getScreenshotHotkey?.();
+      if (!info?.accelerator) return;
+      const pressed = keyboardEventToAccelerator(event);
+      if (pressed && pressed === info.accelerator) {
+        event.preventDefault();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !window.desktopApp?.onScreenshot) return undefined;
     return window.desktopApp.onScreenshot(async ({ imageBase64 }) => {
       try {
@@ -397,7 +435,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isSessionActive) return;
-    if (!["screen", "mic"].includes(activeAudioSourceRef.current)) return;
+    if (!["system", "mic"].includes(activeAudioSourceRef.current)) return;
     if (!captureStream.current) return;
     if (dgSocketRef.current) {
       try { dgSocketRef.current.close(); } catch {}
@@ -418,16 +456,13 @@ export default function App() {
           <img style={{ width: "24px" }} src={logo} alt="" className="shrink-0" />
           <h1 className="shrink-0">realtime console</h1>
           <div className="flex flex-wrap items-center gap-2 ml-auto shrink-0">
-            <SessionToolbar
-              llmModelChoice={llmModelChoice}
-              setLlmModelChoice={setLlmModelChoice}
-              isSessionActive={isSessionActive}
-              minSendChars={minSendChars}
-              setMinSendChars={setMinSendChars}
-              languageMode={languageMode}
-              setLanguageMode={setLanguageMode}
-              liveTranscript={sync.liveTranscript}
-            />
+            <button
+              type="button"
+              onClick={() => setSettingsPanelOpen(true)}
+              className="text-sm px-3 py-1.5 rounded-full bg-gray-600 text-white hover:bg-gray-700 shrink-0"
+            >
+              设置
+            </button>
             <button
               type="button"
               onClick={openMobileSync}
@@ -438,6 +473,25 @@ export default function App() {
           </div>
         </div>
       </nav>
+      <SettingsPanel
+        open={settingsPanelOpen}
+        onClose={() => setSettingsPanelOpen(false)}
+        llmModelChoice={llmModelChoice}
+        setLlmModelChoice={setLlmModelChoice}
+        minSendChars={minSendChars}
+        setMinSendChars={setMinSendChars}
+        languageMode={languageMode}
+        setLanguageMode={setLanguageMode}
+        autoSendEnabled={autoSendEnabled}
+        setAutoSendEnabled={setAutoSendEnabled}
+        useResumeContext={useResumeContext}
+        setUseResumeContext={setUseResumeContext}
+        resumeSummary={resumeSummary}
+        setResumeSummary={setResumeSummary}
+        uploadResumeMd={uploadResumeMd}
+        usage={sync.usage}
+        refreshUsage={sync.refreshUsage}
+      />
       <MobileSyncPanel
         open={mobilePanelOpen}
         onClose={() => setMobilePanelOpen(false)}
@@ -450,21 +504,16 @@ export default function App() {
         <section ref={chatScrollContainer} className="flex-1 min-h-0 px-4 py-2 overflow-y-auto">
           <ChatWindow events={sync.events} />
         </section>
-        <section className="shrink-0 min-h-28 max-h-[45vh] px-4 pb-4 overflow-y-auto">
+        <section className="shrink-0 px-4 pb-4">
           <SessionControls
             startSession={startSession}
             stopSession={stopSession}
             sendMessageWithImages={sendMessageWithImages}
             submitTranscript={submitTranscript}
             isSessionActive={isSessionActive}
-            autoSendEnabled={autoSendEnabled}
-            setAutoSendEnabled={setAutoSendEnabled}
-            useResumeContext={useResumeContext}
-            setUseResumeContext={setUseResumeContext}
-            resumeSummary={resumeSummary}
-            setResumeSummary={setResumeSummary}
-            uploadResumeMd={uploadResumeMd}
             composerBusy={composerBusy}
+            liveTranscript={sync.liveTranscript}
+            languageMode={languageMode}
           />
         </section>
       </main>

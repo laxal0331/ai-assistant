@@ -20,6 +20,15 @@ import {
   setLiveTranscript,
 } from "./server/sessionHub.js";
 import { getNetworkInfo } from "./server/networkInfo.js";
+import {
+  checkCanConsume,
+  computeChatCreditCost,
+  consumeCredits,
+  getUsageSnapshot,
+  initUsageQuota,
+  isQuotaEnabled,
+  redeemRechargeCode,
+} from "./server/usageQuota.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envCandidates = [
@@ -213,6 +222,12 @@ function resolveLlmProviders(modelChoice) {
   return [{ ...base, model: modelId || base.model }];
 }
 
+function isDeepSeekV4FlashModel(provider) {
+  if (provider?.name !== "DeepSeek") return false;
+  const model = String(provider.model || "").toLowerCase();
+  return model.includes("v4-flash") || model === "deepseek-chat";
+}
+
 function buildLlmRequestBody(provider, prompt, userText, stream) {
   const body = {
     model: provider.model,
@@ -223,6 +238,9 @@ function buildLlmRequestBody(provider, prompt, userText, stream) {
     max_tokens: llmMaxTokens,
   };
   if (stream) body.stream = true;
+  if (isDeepSeekV4FlashModel(provider)) {
+    body.thinking = { type: "disabled" };
+  }
   return body;
 }
 
@@ -361,6 +379,13 @@ function makeAssistantEvent(text) {
   };
 }
 
+function broadcastUsageUpdate(session) {
+  broadcast(session, {
+    type: "usage.update",
+    usage: getUsageSnapshot(),
+  });
+}
+
 async function handleSessionChatSend(session, msg) {
   if (session.busy) {
     broadcast(session, {
@@ -372,6 +397,19 @@ async function handleSessionChatSend(session, msg) {
 
   const text = (msg.text || "").trim();
   if (!text) return;
+
+  const creditCost = computeChatCreditCost({
+    useResumeContext: Boolean(msg.useResumeContext),
+    imageCount: msg.imageCount,
+  });
+  const quotaCheck = checkCanConsume(creditCost);
+  if (!quotaCheck.ok) {
+    broadcast(session, {
+      type: "system.error",
+      text: quotaCheck.message,
+    });
+    return;
+  }
 
   session.busy = true;
   const userEvent = makeUserEvent(text, msg.source || "pc");
@@ -396,6 +434,15 @@ async function handleSessionChatSend(session, msg) {
         });
       },
     );
+
+    if (isQuotaEnabled()) {
+      consumeCredits(creditCost, {
+        source: msg.source || "pc",
+        useResumeContext: Boolean(msg.useResumeContext),
+        imageCount: Math.max(0, Number(msg.imageCount) || 0),
+      });
+      broadcastUsageUpdate(session);
+    }
 
     const doneEvent = makeAssistantEvent(answer || "未生成回复。");
     appendEvent(session, doneEvent);
@@ -466,6 +513,29 @@ app.get("/api/session/:sessionId", (req, res) => {
   });
 });
 
+app.get("/api/usage", (_req, res) => {
+  res.json(getUsageSnapshot());
+});
+
+app.post("/api/usage/redeem", (req, res) => {
+  try {
+    const code = (req.body?.code || "").trim();
+    if (!code) {
+      res.status(400).json({ ok: false, error: "请输入充值码" });
+      return;
+    }
+    const result = redeemRechargeCode(code);
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json(result);
+  } catch (error) {
+    console.error("usage redeem error:", error);
+    res.status(500).json({ ok: false, error: "兑换失败，请稍后重试。" });
+  }
+});
+
 app.post("/api/chat-text", async (req, res) => {
   try {
     const text = (req.body?.text || "").trim();
@@ -475,12 +545,28 @@ app.post("/api/chat-text", async (req, res) => {
       res.status(400).json({ error: "text is required" });
       return;
     }
+    const creditCost = computeChatCreditCost({
+      useResumeContext,
+      imageCount: req.body?.imageCount,
+    });
+    const quotaCheck = checkCanConsume(creditCost);
+    if (!quotaCheck.ok) {
+      res.status(402).json({ error: quotaCheck.message, usage: getUsageSnapshot() });
+      return;
+    }
     const answer = await askLlm(text, {
       useResumeContext,
       resumeSummary,
       modelChoice: req.body?.modelChoice || "auto",
     });
-    res.json({ transcript: text, answer });
+    if (isQuotaEnabled()) {
+      consumeCredits(creditCost, {
+        source: "api",
+        useResumeContext,
+        imageCount: Math.max(0, Number(req.body?.imageCount) || 0),
+      });
+    }
+    res.json({ transcript: text, answer, usage: getUsageSnapshot() });
   } catch (error) {
     console.error("chat-text error:", error);
     res.status(500).json({ error: "Failed to process text" });
@@ -577,6 +663,10 @@ export async function startServer(options = {}) {
   if (options.envPath) {
     dotenv.config({ path: options.envPath, override: true });
   }
+
+  const usageDataDir =
+    options.userDataDir || path.join(rootDir, ".data", "usage");
+  initUsageQuota({ dataDir: usageDataDir });
 
   const activeVite = await setupClientServing({ isProduction, rootDir });
 

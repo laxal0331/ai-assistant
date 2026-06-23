@@ -87,6 +87,8 @@ export function applySyncMessage(setEvents, setLiveTranscript, msg) {
         ]);
       }
       break;
+    case "usage.update":
+      break;
     default:
       break;
   }

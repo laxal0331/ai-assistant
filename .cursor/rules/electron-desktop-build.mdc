@@ -1,0 +1,46 @@
+---
+description: Electron 桌面版前端改动后的构建与打包流程（必读）
+globs: client/**/*,electron/**/*,vite.config.js,package.json
+alwaysApply: false
+---
+
+# Electron 桌面版：改代码后必须重新构建
+
+本仓库桌面 app（`release/win-unpacked/AI Assistant.exe`）**不会**自动加载 `client/` 源码，只读打包进 `app.asar` 的 **`dist/client/`**（项目根目录，不是 `client/dist/client/`）。
+
+## 改这些文件后
+
+涉及 `client/`、`electron/`、`vite.config.js` 或影响前端产物的 `package.json` 脚本时，完成任务前必须处理桌面版构建，不能仅改源码就结束。
+
+## 生产打包（给用户用的 exe）
+
+按顺序执行：
+
+```bash
+npm run build
+npm run dist:dir
+```
+
+然后提示用户：**完全退出**托盘里的旧进程，再打开 `release\win-unpacked\AI Assistant.exe`。
+
+若 `dist:dir` 因 electron 被占用失败，先结束所有 `AI Assistant` 进程，或手动更新 `release/win-unpacked/resources/app.asar` 内的 `dist/client/`。
+
+## 开发调试（无需 dist）
+
+本地快速验证桌面 UI 用：
+
+```bash
+npm run electron:dev
+```
+
+走 Vite 开发服务，改 `client/` 可热更新；**不等于**已更新 release 里的 exe。
+
+## 常见坑
+
+- 只跑 `npm run build` 但没 `dist:dir` → 用户仍看到旧界面（例如手机同步仍显示 127.0.0.1）。
+- Vite 根目录是 `client/`，`build.outDir` 必须指向项目根 `dist/client`（见 `vite.config.js`）。
+- 改完应确认 `dist/client/index.html` 引用的 JS 哈希与 `dist/client/assets/` 一致且时间戳已更新。
+
+## AI 完成标准
+
+改完桌面相关前端后，在回复中说明：是否已 `build` / `dist:dir`，以及用户是否需要重启 exe。

@@ -12,11 +12,16 @@ https://tailwindcss.com/docs/preflight
 }
 
 html,
-body {
+body,
+#root {
   height: 100%;
   width: 100%;
   margin: 0;
   padding: 0;
+}
+
+html,
+body {
   overflow: hidden;
   font-family: "Consolas", "Andale Mono", monospace;
   font-size: 0.9rem;

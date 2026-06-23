@@ -1,7 +1,12 @@
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import Button from "./Button";
-import { fetchNetworkInfo } from "../lib/networkInfo";
+import {
+  buildMobileBaseUrl,
+  clearNetworkInfoCache,
+  fetchNetworkInfo,
+  isLocalhostUrl,
+} from "../lib/networkInfo";
 import { getMobilePageUrl } from "../lib/syncMessages";
 
 export default function MobileSyncPanel({
@@ -14,23 +19,32 @@ export default function MobileSyncPanel({
 }) {
   const [mobileUrl, setMobileUrl] = useState("");
   const [lanIp, setLanIp] = useState(null);
+  const [loadError, setLoadError] = useState("");
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!open || !sessionId) return;
+    if (!open || !sessionId) return undefined;
     let cancelled = false;
 
     async function loadMobileUrl() {
+      setLoadError("");
+      clearNetworkInfoCache();
       try {
-        const info = await fetchNetworkInfo();
+        const info = await fetchNetworkInfo({ bypassCache: true });
         if (cancelled) return;
+        const base = buildMobileBaseUrl(info);
         setLanIp(info.lanIp || null);
-        const base = info.mobileBaseUrl || window.location.origin;
+        if (!base || isLocalhostUrl(base)) {
+          setMobileUrl("");
+          setLoadError("未检测到可用的局域网 IP，手机无法通过 localhost 连接。请确认电脑已连接 WiFi。");
+          return;
+        }
         setMobileUrl(getMobilePageUrl(sessionId, base));
-      } catch {
+      } catch (error) {
         if (cancelled) return;
         setLanIp(null);
-        setMobileUrl(getMobilePageUrl(sessionId));
+        setMobileUrl("");
+        setLoadError(error?.message || "无法获取网络信息");
       }
     }
 
@@ -73,7 +87,7 @@ export default function MobileSyncPanel({
               点击下方按钮生成同步链接，手机扫码或打开链接即可实时查看对话。
             </p>
             <p className="text-xs text-gray-500 text-center">
-              电脑可继续使用 localhost；二维码会自动使用局域网 IP，手机与电脑需在同一 WiFi。
+              手机与电脑需在同一 WiFi；二维码会自动使用局域网 IP，不会使用 localhost。
             </p>
             <Button onClick={handleCreate} className="bg-blue-600">
               生成同步链接
@@ -81,23 +95,29 @@ export default function MobileSyncPanel({
           </div>
         ) : (
           <>
-            <p className="text-sm text-gray-600 break-all">{mobileUrl}</p>
-            {!lanIp ? (
-              <p className="text-xs text-amber-700 bg-amber-50 rounded p-2">
-                未检测到局域网 IP，手机链接可能无法访问。请确认电脑已连 WiFi，或手动将链接中的地址改为电脑的
-                192.168.x.x。
-              </p>
+            {mobileUrl ? (
+              <p className="text-sm text-gray-600 break-all">{mobileUrl}</p>
             ) : (
-              <p className="text-xs text-green-800 bg-green-50 rounded p-2">
-                电脑请保持 localhost 使用（语音/共享桌面正常）；手机请扫下方二维码（局域网
-                {lanIp}）。
-              </p>
+              <p className="text-sm text-gray-400">正在获取局域网链接…</p>
             )}
-            <div className="flex justify-center py-2 bg-gray-50 rounded-lg">
-              {mobileUrl ? <QRCodeSVG value={mobileUrl} size={180} /> : null}
+            {loadError ? (
+              <p className="text-xs text-amber-700 bg-amber-50 rounded p-2">{loadError}</p>
+            ) : lanIp ? (
+              <p className="text-xs text-green-800 bg-green-50 rounded p-2">
+                电脑可继续使用本机窗口；手机请扫下方二维码（局域网 {lanIp}）。
+              </p>
+            ) : null}
+            <div className="flex justify-center py-2 bg-gray-50 rounded-lg min-h-[180px] items-center">
+              {mobileUrl ? (
+                <QRCodeSVG value={mobileUrl} size={180} />
+              ) : (
+                <span className="text-xs text-gray-400 px-4 text-center">
+                  {loadError || "等待局域网地址…"}
+                </span>
+              )}
             </div>
             <div className="flex gap-2 justify-end">
-              <Button onClick={copyLink} className="bg-gray-600">
+              <Button onClick={copyLink} className="bg-gray-600" disabled={!mobileUrl}>
                 {copied ? "已复制" : "复制链接"}
               </Button>
               <Button onClick={handleCreate} className="bg-indigo-600">
@@ -105,15 +125,12 @@ export default function MobileSyncPanel({
               </Button>
             </div>
             <p className="text-xs text-gray-500">
-              电脑连接：{connected ? "已连接" : connectionError || "连接中…"}
+              连接状态：{connected ? "已连接" : connectionError || "连接中…"}
               {sessionId ? ` · 会话 ID：${sessionId.slice(0, 8)}…` : ""}
             </p>
             {connectionError ? (
               <p className="text-xs text-red-700 bg-red-50 rounded p-2">{connectionError}</p>
             ) : null}
-            <p className="text-xs text-gray-400">
-              手机扫码后会单独连接；若手机也显示连接中，请确认在同一 WiFi 且电脑服务已启动。
-            </p>
           </>
         )}
       </div>
