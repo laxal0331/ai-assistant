@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import Button from "./Button";
 import { LLM_MODEL_OPTIONS, getLlmModelLabel } from "../lib/llmModels";
+import {
+  getSttVocabProfileLabel,
+  STT_VOCAB_PROFILE_OPTIONS,
+} from "../lib/sttVocabProfile";
 import { formatAcceleratorLabel, keyboardEventToAccelerator } from "../lib/screenshotHotkey";
 
 const languageLabelMap = {
@@ -18,8 +22,12 @@ export default function SettingsPanel({
   setMinSendChars,
   languageMode,
   setLanguageMode,
+  sttVocabProfile,
+  setSttVocabProfile,
   autoSendEnabled,
   setAutoSendEnabled,
+  screenshotSilentSend,
+  setScreenshotSilentSend,
   useResumeContext,
   setUseResumeContext,
   resumeSummary,
@@ -246,6 +254,24 @@ export default function SettingsPanel({
           </select>
         </label>
 
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-gray-700">转写词汇（岗位）</span>
+          <select
+            value={sttVocabProfile}
+            onChange={(e) => setSttVocabProfile(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 bg-white"
+          >
+            {STT_VOCAB_PROFILE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-gray-500 leading-relaxed">
+            当前：{getSttVocabProfileLabel(sttVocabProfile)}。优先识别该岗位高频术语，通用开发词为辅助；若正在语音会话，切换后会自动重连转写通道。
+          </span>
+        </label>
+
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -302,6 +328,17 @@ export default function SettingsPanel({
             {hotkeyError ? (
               <p className="text-xs text-red-700 bg-red-50 rounded p-2">{hotkeyError}</p>
             ) : null}
+            <label className="flex items-start gap-2 mt-1">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={screenshotSilentSend}
+                onChange={(e) => setScreenshotSilentSend(e.target.checked)}
+              />
+              <span className="text-xs text-gray-600 leading-relaxed">
+                截图发送时不显示主窗口（后台 OCR 并问 AI，手机同步照常收到回答；失败时用系统通知提示）
+              </span>
+            </label>
           </div>
         ) : null}
 

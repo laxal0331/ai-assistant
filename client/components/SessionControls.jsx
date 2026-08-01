@@ -55,9 +55,24 @@ function SessionActive({
   composerBusy,
   liveTranscript,
   languageMode,
+  activeAudioSource,
+  micTranscriptionPaused,
 }) {
   return (
     <div className="w-full flex flex-col gap-2 px-4 py-3 min-w-0">
+      {activeAudioSource === "mic" ? (
+        <div
+          className={`text-xs px-2.5 py-1.5 rounded-lg border ${
+            micTranscriptionPaused
+              ? "bg-amber-50 border-amber-200 text-amber-800"
+              : "bg-gray-50 border-gray-200 text-gray-600"
+          }`}
+        >
+          {micTranscriptionPaused
+            ? "转写已暂停 · 再按 Ctrl+X 恢复"
+            : "麦克风模式：Ctrl+X 暂停转写（答题时避免误自动发送）"}
+        </div>
+      ) : null}
       <div className="w-full min-w-0">
         <ChatComposer
           compact
@@ -92,6 +107,8 @@ export default function SessionControls({
   composerBusy,
   liveTranscript,
   languageMode,
+  activeAudioSource,
+  micTranscriptionPaused,
 }) {
   return (
     <div className="w-full h-full min-w-0 border-t-2 border-gray-200 rounded-md">
@@ -103,6 +120,8 @@ export default function SessionControls({
           composerBusy={composerBusy}
           liveTranscript={liveTranscript}
           languageMode={languageMode}
+          activeAudioSource={activeAudioSource}
+          micTranscriptionPaused={micTranscriptionPaused}
         />
       ) : (
         <SessionStopped startSession={startSession} />

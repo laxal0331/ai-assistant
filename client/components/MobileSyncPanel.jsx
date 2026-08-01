@@ -7,7 +7,7 @@ import {
   fetchNetworkInfo,
   isLocalhostUrl,
 } from "../lib/networkInfo";
-import { getMobilePageUrl } from "../lib/syncMessages";
+import { getMobilePageUrl, getWatchPageUrl } from "../lib/syncMessages";
 
 export default function MobileSyncPanel({
   open,
@@ -18,6 +18,8 @@ export default function MobileSyncPanel({
   onCreateOrOpen,
 }) {
   const [mobileUrl, setMobileUrl] = useState("");
+  const [watchUrl, setWatchUrl] = useState("");
+  const [qrMode, setQrMode] = useState("mobile");
   const [lanIp, setLanIp] = useState(null);
   const [loadError, setLoadError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -25,6 +27,7 @@ export default function MobileSyncPanel({
   useEffect(() => {
     if (!open || !sessionId) return undefined;
     let cancelled = false;
+    setQrMode("mobile");
 
     async function loadMobileUrl() {
       setLoadError("");
@@ -36,14 +39,17 @@ export default function MobileSyncPanel({
         setLanIp(info.lanIp || null);
         if (!base || isLocalhostUrl(base)) {
           setMobileUrl("");
+          setWatchUrl("");
           setLoadError("未检测到可用的局域网 IP，手机无法通过 localhost 连接。请确认电脑已连接 WiFi。");
           return;
         }
         setMobileUrl(getMobilePageUrl(sessionId, base));
+        setWatchUrl(getWatchPageUrl(sessionId, base));
       } catch (error) {
         if (cancelled) return;
         setLanIp(null);
         setMobileUrl("");
+        setWatchUrl("");
         setLoadError(error?.message || "无法获取网络信息");
       }
     }
@@ -56,18 +62,21 @@ export default function MobileSyncPanel({
 
   if (!open) return null;
 
+  const activeUrl = qrMode === "watch" ? watchUrl : mobileUrl;
+
   async function handleCreate() {
     await onCreateOrOpen();
   }
 
   async function copyLink() {
-    if (!mobileUrl) return;
+    const url = activeUrl || mobileUrl || watchUrl;
+    if (!url) return;
     try {
-      await navigator.clipboard.writeText(mobileUrl);
+      await navigator.clipboard.writeText(url);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      window.prompt("复制此链接到手机浏览器：", mobileUrl);
+      window.prompt("复制此链接到手表浏览器：", url);
     }
   }
 
@@ -95,8 +104,19 @@ export default function MobileSyncPanel({
           </div>
         ) : (
           <>
-            {mobileUrl ? (
-              <p className="text-sm text-gray-600 break-all">{mobileUrl}</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-gray-800">
+                {qrMode === "watch" ? "手表二维码" : "手机二维码"}
+              </p>
+              <Button
+                onClick={() => setQrMode((mode) => (mode === "watch" ? "mobile" : "watch"))}
+                className="bg-slate-700 px-3 py-2 text-sm"
+              >
+                {qrMode === "watch" ? "切到手机" : "切到手表"}
+              </Button>
+            </div>
+            {activeUrl ? (
+              <p className="text-sm text-gray-600 break-all">{activeUrl}</p>
             ) : (
               <p className="text-sm text-gray-400">正在获取局域网链接…</p>
             )}
@@ -108,8 +128,8 @@ export default function MobileSyncPanel({
               </p>
             ) : null}
             <div className="flex justify-center py-2 bg-gray-50 rounded-lg min-h-[180px] items-center">
-              {mobileUrl ? (
-                <QRCodeSVG value={mobileUrl} size={180} />
+              {activeUrl ? (
+                <QRCodeSVG value={activeUrl} size={180} />
               ) : (
                 <span className="text-xs text-gray-400 px-4 text-center">
                   {loadError || "等待局域网地址…"}
@@ -117,7 +137,7 @@ export default function MobileSyncPanel({
               )}
             </div>
             <div className="flex gap-2 justify-end">
-              <Button onClick={copyLink} className="bg-gray-600" disabled={!mobileUrl}>
+              <Button onClick={copyLink} className="bg-gray-600" disabled={!activeUrl}>
                 {copied ? "已复制" : "复制链接"}
               </Button>
               <Button onClick={handleCreate} className="bg-indigo-600">

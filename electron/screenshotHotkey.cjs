@@ -47,16 +47,30 @@ function normalizeAccelerator(raw) {
 
 function loadScreenshotHotkey() {
   try {
-    const configPath = getConfigPath();
-    if (!fs.existsSync(configPath)) {
+    const parsed = readConfig();
+    if (!Object.keys(parsed).length && !fs.existsSync(getConfigPath())) {
       return { accelerator: DEFAULT_ACCELERATOR, label: acceleratorToLabel(DEFAULT_ACCELERATOR) };
     }
-    const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     const accelerator = normalizeAccelerator(parsed?.screenshotHotkey) || DEFAULT_ACCELERATOR;
     return { accelerator, label: acceleratorToLabel(accelerator) };
   } catch {
     return { accelerator: DEFAULT_ACCELERATOR, label: acceleratorToLabel(DEFAULT_ACCELERATOR) };
   }
+}
+
+function readConfig() {
+  const configPath = getConfigPath();
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeConfig(config) {
+  const configPath = getConfigPath();
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
 }
 
 function saveScreenshotHotkey(accelerator) {
@@ -65,18 +79,21 @@ function saveScreenshotHotkey(accelerator) {
     throw new Error("无效的快捷键格式");
   }
 
-  const configPath = getConfigPath();
-  let config = {};
-  if (fs.existsSync(configPath)) {
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    } catch {
-      config = {};
-    }
-  }
+  const config = readConfig();
   config.screenshotHotkey = normalized;
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  writeConfig(config);
   return { accelerator: normalized, label: acceleratorToLabel(normalized) };
+}
+
+function loadScreenshotSilentSend() {
+  return readConfig().screenshotSilentSend === true;
+}
+
+function saveScreenshotSilentSend(enabled) {
+  const config = readConfig();
+  config.screenshotSilentSend = Boolean(enabled);
+  writeConfig(config);
+  return config.screenshotSilentSend;
 }
 
 module.exports = {
@@ -85,4 +102,6 @@ module.exports = {
   normalizeAccelerator,
   loadScreenshotHotkey,
   saveScreenshotHotkey,
+  loadScreenshotSilentSend,
+  saveScreenshotSilentSend,
 };

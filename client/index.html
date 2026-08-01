@@ -13,6 +13,21 @@
   <body>
     <div id="root"><!--ssr-outlet--></div>
     <!-- hydration -->
+    <script>
+      (function () {
+        var match = location.pathname.match(/^\/m\/([^/]+)\/?$/);
+        if (!match) return;
+        var smallScreen = false;
+        try {
+          smallScreen =
+            (screen && (screen.width <= 320 || screen.height <= 360)) ||
+            (window.innerWidth <= 320 || window.innerHeight <= 360);
+        } catch (e) {}
+        if (smallScreen) {
+          location.replace("/w/" + match[1] + location.search + location.hash);
+        }
+      })();
+    </script>
     <script type="module" src="/entry-client.jsx"></script>
   </body>
 </html>

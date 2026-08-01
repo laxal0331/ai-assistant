@@ -6,6 +6,12 @@ import MobileSyncPanel from "./MobileSyncPanel";
 import SettingsPanel from "./SettingsPanel";
 import { useSessionSync } from "../hooks/useSessionSync";
 import { loadLlmModelChoice, saveLlmModelChoice } from "../lib/llmModels";
+import {
+  getSttVocabProfileLabel,
+  loadSttVocabProfile,
+  saveSttVocabProfile,
+  STT_VOCAB_PROFILE_OPTIONS,
+} from "../lib/sttVocabProfile";
 import { recognizeImageFile } from "../lib/ocrClient";
 import { computeChatCreditCost } from "../lib/usageCost";
 import { buildLlmUserMessage } from "../lib/buildLlmUserMessage";
@@ -13,6 +19,15 @@ import { keyboardEventToAccelerator } from "../lib/screenshotHotkey";
 
 const TARGET_SR = 16000;
 const SYNC_SESSION_KEY = "sync_session_id";
+const MIC_PAUSE_ACCELERATOR = "Control+X";
+
+function isEditableTarget(target) {
+  if (!target || typeof target !== "object") return false;
+  const el = /** @type {HTMLElement} */ (target);
+  const tag = el.tagName?.toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  return Boolean(el.isContentEditable);
+}
 
 function downsampleTo16k(input, inputRate) {
   if (inputRate === TARGET_SR) return input;
@@ -48,12 +63,16 @@ export default function App() {
   const [autoSendEnabled, setAutoSendEnabled] = useState(true);
   const [minSendChars, setMinSendChars] = useState(6);
   const [languageMode, setLanguageMode] = useState("zh-CN");
+  const [sttVocabProfile, setSttVocabProfile] = useState(() => loadSttVocabProfile());
   const [useResumeContext, setUseResumeContext] = useState(false);
   const [resumeSummary, setResumeSummary] = useState("");
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [llmModelChoice, setLlmModelChoice] = useState(() => loadLlmModelChoice());
   const [composerBusy, setComposerBusy] = useState(false);
+  const [activeAudioSource, setActiveAudioSource] = useState("none");
+  const [micTranscriptionPaused, setMicTranscriptionPaused] = useState(false);
+  const [screenshotSilentSend, setScreenshotSilentSend] = useState(false);
 
   const sync = useSessionSync({
     role: "pc",
@@ -79,6 +98,21 @@ export default function App() {
   const activeAudioSourceRef = useRef("none");
   const transcriptSyncTimerRef = useRef(null);
   const sendMessageWithImagesRef = useRef(null);
+  const micTranscriptionPausedRef = useRef(false);
+  const screenshotSilentSendRef = useRef(false);
+
+  function reportComposerError(message, silentUi = false) {
+    const text = message || "未知错误";
+    if (silentUi) {
+      sync.sendSystem(`截图问 AI 失败：${text}`).catch(() => {});
+      window.desktopApp?.showNotification?.({
+        title: "截图问 AI",
+        body: text,
+      });
+      return;
+    }
+    window.alert(text);
+  }
 
   async function sendToLlm(text, options = {}) {
     const t = text.trim();
@@ -124,6 +158,7 @@ export default function App() {
   }
 
   function scheduleAutoSend() {
+    if (micTranscriptionPausedRef.current) return;
     if (!autoSendEnabledRef.current) return;
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     silenceTimerRef.current = setTimeout(async () => {
@@ -137,10 +172,10 @@ export default function App() {
     }, 800);
   }
 
-  function connectDeepgramSocket(lang) {
+  function connectDeepgramSocket(lang, vocabProfile) {
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(
-      `${protocol}://${window.location.host}/ws/deepgram-stt?lang=${encodeURIComponent(lang)}`,
+      `${protocol}://${window.location.host}/ws/deepgram-stt?lang=${encodeURIComponent(lang)}&vocab=${encodeURIComponent(vocabProfile)}`,
     );
     ws.binaryType = "arraybuffer";
     dgSocketRef.current = ws;
@@ -153,10 +188,15 @@ export default function App() {
           return;
         }
         if (msg.type === "ready") {
-          sync.sendSystem(`转写通道已连接（语言: ${lang}）。`).catch(() => {});
+          sync
+            .sendSystem(
+              `转写通道已连接（语言: ${lang}，词汇: ${getSttVocabProfileLabel(vocabProfile)}）。`,
+            )
+            .catch(() => {});
           return;
         }
         if (msg.type !== "transcript") return;
+        if (micTranscriptionPausedRef.current) return;
         if (msg.isFinal) {
           finalTextRef.current = `${finalTextRef.current} ${msg.text}`.trim();
           partialTextRef.current = "";
@@ -173,6 +213,57 @@ export default function App() {
     return ws;
   }
 
+  function resetMicTranscriptionPause() {
+    micTranscriptionPausedRef.current = false;
+    setMicTranscriptionPaused(false);
+  }
+
+  function clearTranscriptBuffers() {
+    finalTextRef.current = "";
+    partialTextRef.current = "";
+    pushLiveTranscript("");
+  }
+
+  function pauseMicTranscription() {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    clearTranscriptBuffers();
+    if (dgSocketRef.current) {
+      try {
+        if (dgSocketRef.current.readyState === WebSocket.OPEN) {
+          dgSocketRef.current.send("close");
+        }
+      } catch {}
+      try {
+        dgSocketRef.current.close();
+      } catch {}
+      dgSocketRef.current = null;
+    }
+  }
+
+  function resumeMicTranscription() {
+    if (activeAudioSourceRef.current !== "mic" || !captureStream.current) return;
+    connectDeepgramSocket(languageMode, sttVocabProfile);
+  }
+
+  function toggleMicTranscriptionPause() {
+    if (activeAudioSourceRef.current !== "mic" || !captureStream.current) return;
+    const next = !micTranscriptionPausedRef.current;
+    micTranscriptionPausedRef.current = next;
+    setMicTranscriptionPaused(next);
+    if (next) {
+      pauseMicTranscription();
+      sync
+        .sendSystem("麦克风转写已暂停（Ctrl+X 恢复，避免答题时误触发自动发送）")
+        .catch(() => {});
+      return;
+    }
+    resumeMicTranscription();
+    sync.sendSystem("麦克风转写已恢复").catch(() => {});
+  }
+
   async function startSession(options = {}) {
     const { audioSource = "none" } = options;
     if (
@@ -184,6 +275,8 @@ export default function App() {
       );
     }
     activeAudioSourceRef.current = audioSource;
+    setActiveAudioSource(audioSource);
+    resetMicTranscriptionPause();
     const sessionId = await sync.clearSession();
     if (sessionId) {
       window.localStorage.setItem(SYNC_SESSION_KEY, sessionId);
@@ -227,13 +320,14 @@ export default function App() {
     }
     captureStream.current = stream;
 
-    connectDeepgramSocket(languageMode);
+    connectDeepgramSocket(languageMode, sttVocabProfile);
 
     const audioOnly = new MediaStream([stream.getAudioTracks()[0]]);
     const ac = new window.AudioContext();
     const src = ac.createMediaStreamSource(audioOnly);
     const proc = ac.createScriptProcessor(4096, 1, 1);
     proc.onaudioprocess = (event) => {
+      if (micTranscriptionPausedRef.current) return;
       if (!dgSocketRef.current || dgSocketRef.current.readyState !== WebSocket.OPEN) return;
       const float = event.inputBuffer.getChannelData(0);
       const down = downsampleTo16k(float, ac.sampleRate);
@@ -252,6 +346,8 @@ export default function App() {
 
   function stopSession() {
     activeAudioSourceRef.current = "none";
+    setActiveAudioSource("none");
+    resetMicTranscriptionPause();
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -284,7 +380,7 @@ export default function App() {
     setIsSessionActive(false);
   }
 
-  async function sendMessageWithImages({ text = "", files = [], ocrTexts = null } = {}) {
+  async function sendMessageWithImages({ text = "", files = [], ocrTexts = null, silentUi = false } = {}) {
     const trimmed = text.trim();
     const imageFiles = Array.isArray(files) ? files.filter(Boolean) : [];
     if (!trimmed && imageFiles.length === 0) return;
@@ -310,8 +406,10 @@ export default function App() {
       await sendToLlm(llmText, { imageCount: imageFiles.length });
     } catch (error) {
       const message = error?.message || String(error);
-      window.alert(message);
-      sync.sendSystem(`图片识别失败：${message}`).catch(() => {});
+      reportComposerError(message, silentUi);
+      if (!silentUi) {
+        sync.sendSystem(`图片识别失败：${message}`).catch(() => {});
+      }
     } finally {
       setComposerBusy(false);
     }
@@ -389,8 +487,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    function onMicPauseHotkey(event) {
+      if (activeAudioSourceRef.current !== "mic" || !captureStream.current) return;
+      if (isEditableTarget(event.target)) return;
+      if (keyboardEventToAccelerator(event) !== MIC_PAUSE_ACCELERATOR) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleMicTranscriptionPause();
+    }
+    window.addEventListener("keydown", onMicPauseHotkey, true);
+    return () => window.removeEventListener("keydown", onMicPauseHotkey, true);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !window.desktopApp?.isDesktopApp) return undefined;
-    function onKeyDown(event) {
+    function onScreenshotHotkeyDown(event) {
       const info = window.desktopApp.getScreenshotHotkey?.();
       if (!info?.accelerator) return;
       const pressed = keyboardEventToAccelerator(event);
@@ -398,8 +510,8 @@ export default function App() {
         event.preventDefault();
       }
     }
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keydown", onScreenshotHotkeyDown, true);
+    return () => window.removeEventListener("keydown", onScreenshotHotkeyDown, true);
   }, []);
 
   useEffect(() => {
@@ -407,19 +519,35 @@ export default function App() {
     return window.desktopApp.onScreenshot(async ({ imageBase64 }) => {
       try {
         const blob = await fetch(imageBase64).then((response) => response.blob());
-        const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
+        const isJpeg = blob.type === "image/jpeg";
+        const file = new File([blob], `screenshot-${Date.now()}.${isJpeg ? "jpg" : "png"}`, {
+          type: blob.type || "image/png",
+        });
         await sendMessageWithImagesRef.current?.({
           text: "请解答图中内容，先给结论再给要点。",
           files: [file],
+          silentUi: screenshotSilentSendRef.current,
         });
       } catch (error) {
-        window.alert(error?.message || String(error));
+        reportComposerError(error?.message || String(error), screenshotSilentSendRef.current);
       }
     });
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !window.desktopApp?.getScreenshotSilentSend) return;
+    const enabled = Boolean(window.desktopApp.getScreenshotSilentSend());
+    setScreenshotSilentSend(enabled);
+    screenshotSilentSendRef.current = enabled;
+  }, []);
+
+  useEffect(() => {
+    screenshotSilentSendRef.current = screenshotSilentSend;
+    if (typeof window === "undefined" || !window.desktopApp?.setScreenshotSilentSend) return;
+    window.desktopApp.setScreenshotSilentSend(screenshotSilentSend).catch(() => {});
+  }, [screenshotSilentSend]);
+
+  useEffect(() => {
     autoSendEnabledRef.current = autoSendEnabled;
     window.localStorage.setItem("auto_send_enabled", String(autoSendEnabled));
   }, [autoSendEnabled]);
@@ -434,14 +562,19 @@ export default function App() {
   }, [llmModelChoice]);
 
   useEffect(() => {
+    saveSttVocabProfile(sttVocabProfile);
+  }, [sttVocabProfile]);
+
+  useEffect(() => {
     if (!isSessionActive) return;
     if (!["system", "mic"].includes(activeAudioSourceRef.current)) return;
     if (!captureStream.current) return;
+    if (activeAudioSourceRef.current === "mic" && micTranscriptionPausedRef.current) return;
     if (dgSocketRef.current) {
       try { dgSocketRef.current.close(); } catch {}
     }
-    connectDeepgramSocket(languageMode);
-  }, [languageMode, isSessionActive]);
+    connectDeepgramSocket(languageMode, sttVocabProfile);
+  }, [languageMode, sttVocabProfile, isSessionActive]);
 
   useEffect(() => {
     if (chatScrollContainer.current) {
@@ -482,8 +615,12 @@ export default function App() {
         setMinSendChars={setMinSendChars}
         languageMode={languageMode}
         setLanguageMode={setLanguageMode}
+        sttVocabProfile={sttVocabProfile}
+        setSttVocabProfile={setSttVocabProfile}
         autoSendEnabled={autoSendEnabled}
         setAutoSendEnabled={setAutoSendEnabled}
+        screenshotSilentSend={screenshotSilentSend}
+        setScreenshotSilentSend={setScreenshotSilentSend}
         useResumeContext={useResumeContext}
         setUseResumeContext={setUseResumeContext}
         resumeSummary={resumeSummary}
@@ -514,6 +651,8 @@ export default function App() {
             composerBusy={composerBusy}
             liveTranscript={sync.liveTranscript}
             languageMode={languageMode}
+            activeAudioSource={activeAudioSource}
+            micTranscriptionPaused={micTranscriptionPaused}
           />
         </section>
       </main>

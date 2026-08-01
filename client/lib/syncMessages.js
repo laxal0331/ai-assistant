@@ -106,3 +106,10 @@ export function getMobilePageUrl(sessionId, mobileBaseUrl) {
     (typeof window !== "undefined" ? window.location.origin : "");
   return `${base}/m/${sessionId}`;
 }
+
+export function getWatchPageUrl(sessionId, mobileBaseUrl) {
+  const base =
+    mobileBaseUrl ||
+    (typeof window !== "undefined" ? window.location.origin : "");
+  return `${base}/w/${sessionId}`;
+}

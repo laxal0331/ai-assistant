@@ -29,6 +29,16 @@ import {
   isQuotaEnabled,
   redeemRechargeCode,
 } from "./server/usageQuota.js";
+import {
+  buildDeepgramListenUrl,
+  buildDeepgramStreamUrl,
+  getDefaultProfileId,
+  initSttVocabulary,
+  listSttVocabProfiles,
+  normalizeProfileId,
+  normalizeTranscript,
+} from "./server/vocabulary/index.js";
+import { initWecomBot } from "./server/wecomBot/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envCandidates = [
@@ -64,40 +74,6 @@ const systemPrompt =
   process.env.SYSTEM_PROMPT ||
   "你是中文AI助手。先给结论，再给要点，语言简洁。";
 let latestResumeSummary = "";
-
-const TERM_NORMALIZATIONS = [
-  [/\bmy\s*sql\b/gi, "MySQL"],
-  [/\bpost\s*gre\s*sql\b/gi, "PostgreSQL"],
-  [/\bredis\b/gi, "Redis"],
-  [/\bspring\s*boot\b/gi, "Spring Boot"],
-  [/\bspring\s*cloud\b/gi, "Spring Cloud"],
-  [/\bj\s*v\s*m\b/gi, "JVM"],
-  [/\bjava\s*script\b/gi, "JavaScript"],
-  [/\btype\s*script\b/gi, "TypeScript"],
-  [/\bnode\s*js\b/gi, "Node.js"],
-  [/\breact\s*js\b/gi, "React"],
-  [/\bvue\s*js\b/gi, "Vue"],
-  [/\bnext\s*js\b/gi, "Next.js"],
-  [/\bnuxt\s*js\b/gi, "Nuxt.js"],
-  [/\brest\s*api\b/gi, "REST API"],
-  [/\bgraphql\b/gi, "GraphQL"],
-  [/\bkafka\b/gi, "Kafka"],
-  [/\brabbit\s*mq\b/gi, "RabbitMQ"],
-  [/\bnginx\b/gi, "Nginx"],
-  [/\bkubernetes\b/gi, "Kubernetes"],
-  [/\bdocker\b/gi, "Docker"],
-  [/\bci\s*cd\b/gi, "CI/CD"],
-];
-
-function normalizeTranscript(text, applyEnglishTerms = true) {
-  let out = (text || "").trim();
-  if (!out) return out;
-  if (!applyEnglishTerms) return out;
-  for (const [pattern, replacement] of TERM_NORMALIZATIONS) {
-    out = out.replace(pattern, replacement);
-  }
-  return out;
-}
 
 function isResumeRelated(question) {
   const q = (question || "").toLowerCase();
@@ -483,6 +459,248 @@ function handleSessionClear(session) {
   broadcast(session, { type: "session.clear" });
 }
 
+function renderWatchPage(sessionId) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>&#25163;&#34920;&#21516;&#27493;</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; padding: 0; }
+    body {
+      background: #0f172a;
+      color: #f8fafc;
+      font-family: Arial, sans-serif;
+      font-size: 19px;
+      overflow: hidden;
+    }
+    .page { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; }
+    .top {
+      flex: 0 0 auto;
+      border-bottom: 1px solid #334155;
+      background: #111827;
+      padding: 7px 9px 6px;
+    }
+    .title { font-weight: bold; font-size: 18px; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .status { color: #cbd5e1; font-size: 14px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #messages { flex: 1 1 auto; overflow-y: auto; padding: 8px 7px 10px; }
+    .card {
+      border-radius: 10px;
+      background: #1e293b;
+      color: #f8fafc;
+      margin-bottom: 8px;
+      padding: 8px 9px;
+      font-size: 20px;
+      line-height: 27px;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .user { background: #1d4ed8; color: #eff6ff; }
+    .assistant { background: #1e293b; color: #f8fafc; }
+    .empty { color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="top">
+      <div class="title">&#25163;&#34920;&#21482;&#35835;&#21516;&#27493;</div>
+      <div id="status" class="status">&#36830;&#25509;&#20013;</div>
+    </div>
+    <div id="messages"><div class="card empty">&#31561;&#24453;&#21516;&#27493;&#20869;&#23481;</div></div>
+  </div>
+  <script>
+    (function () {
+      var sessionId = ${JSON.stringify(sessionId)};
+      var messages = [];
+      var statusEl = document.getElementById("status");
+      var messagesEl = document.getElementById("messages");
+
+      function textOf(value) {
+        return typeof value === "string" ? value : "";
+      }
+
+      function pushText(value, out) {
+        value = textOf(value).replace(/^\s+|\s+$/g, "");
+        if (value) out.push(value);
+      }
+
+      function collectContent(parts, out) {
+        var i, part;
+        if (!parts) return;
+        if (typeof parts === "string") {
+          pushText(parts, out);
+          return;
+        }
+        if (Object.prototype.toString.call(parts) !== "[object Array]") return;
+        for (i = 0; i < parts.length; i += 1) {
+          part = parts[i] || {};
+          pushText(part.text, out);
+          pushText(part.transcript, out);
+        }
+      }
+
+      function collectResponse(response, out) {
+        var i, j, output, content;
+        if (!response || !response.output) return;
+        for (i = 0; i < response.output.length; i += 1) {
+          output = response.output[i] || {};
+          content = output.content || [];
+          for (j = 0; j < content.length; j += 1) {
+            pushText(content[j] && content[j].text, out);
+            pushText(content[j] && content[j].transcript, out);
+          }
+        }
+      }
+
+      function eventToMessage(event) {
+        var texts = [];
+        var role = "assistant";
+        if (!event || typeof event !== "object") return null;
+        if (event.item && event.item.role) role = event.item.role;
+        if (event.role) role = event.role;
+        if (event.type && event.type.indexOf("input_audio_transcription") >= 0) role = "user";
+        if (event.type === "conversation.item.create" && event.item && event.item.role === "user") role = "user";
+        if (event.delta) {
+          pushText(event.delta.text, texts);
+          pushText(event.delta.transcript, texts);
+        }
+        if (event.item) collectContent(event.item.content || event.item.transcript, texts);
+        if (event.response) collectResponse(event.response, texts);
+        var text = texts.join("").replace(/^\s+|\s+$/g, "");
+        if (!text) return null;
+        return { role: role === "user" ? "user" : "assistant", text: text };
+      }
+
+      function compactMessages(list) {
+        var out = [];
+        var i, msg, prev;
+        for (i = 0; i < list.length; i += 1) {
+          msg = list[i];
+          if (!msg || !msg.text) continue;
+          prev = out[out.length - 1];
+          if (prev && prev.role === msg.role && msg.text.length <= 3) {
+            prev.text += msg.text;
+          } else {
+            out.push({ role: msg.role, text: msg.text, streaming: msg.streaming });
+          }
+        }
+        return out;
+      }
+
+      function setStatus(text) {
+        statusEl.innerHTML = "";
+        statusEl.appendChild(document.createTextNode(text));
+      }
+
+      function appendMessage(msg) {
+        if (!msg || !msg.text) return;
+        messages.push({ role: msg.role, text: msg.text });
+        messages = compactMessages(messages);
+        if (messages.length > 18) messages = messages.slice(messages.length - 18);
+        render();
+      }
+
+      function appendAssistantDelta(text) {
+        var last;
+        text = textOf(text);
+        if (!text) return;
+        last = messages[messages.length - 1];
+        if (last && last.role === "assistant" && last.streaming) {
+          last.text += text;
+        } else {
+          messages.push({ role: "assistant", text: text, streaming: true });
+        }
+        if (messages.length > 18) messages = messages.slice(messages.length - 18);
+        render();
+      }
+
+      function finishAssistant(msg) {
+        var last;
+        if (!msg || !msg.text) return;
+        last = messages[messages.length - 1];
+        if (last && last.role === "assistant" && last.streaming) {
+          last.text = msg.text;
+          last.streaming = false;
+          render();
+          return;
+        }
+        appendMessage(msg);
+      }
+
+      function render() {
+        var i, div;
+        messagesEl.innerHTML = "";
+        if (!messages.length) {
+          div = document.createElement("div");
+          div.className = "card empty";
+          div.appendChild(document.createTextNode("已打开，等待同步内容"));
+          messagesEl.appendChild(div);
+          return;
+        }
+        for (i = 0; i < messages.length; i += 1) {
+          div = document.createElement("div");
+          div.className = "card " + messages[i].role;
+          div.appendChild(document.createTextNode(messages[i].text));
+          messagesEl.appendChild(div);
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function handleMessage(raw) {
+        var msg, list, i, parsed;
+        try { msg = JSON.parse(raw); } catch (e) { return; }
+        if (msg.type === "snapshot") {
+          messages = [];
+          list = msg.events || [];
+          for (i = list.length - 1; i >= 0; i -= 1) {
+            parsed = eventToMessage(list[i]);
+            if (parsed) messages.push(parsed);
+          }
+          messages = compactMessages(messages);
+          setStatus("已连接");
+          render();
+        } else if (msg.type === "event.append") {
+          appendMessage(eventToMessage(msg.event));
+        } else if (msg.type === "response.done") {
+          finishAssistant(eventToMessage(msg.event));
+        } else if (msg.type === "response.delta") {
+          appendAssistantDelta(msg.delta && msg.delta.text);
+        } else if (msg.type === "transcript.live") {
+          setStatus(msg.text ? "转写: " + msg.text : "已连接");
+        } else if (msg.type === "session.clear") {
+          messages = [];
+          render();
+        } else if (msg.type === "error") {
+          setStatus(msg.message || "连接错误");
+        }
+      }
+
+      function connect() {
+        var proto = location.protocol === "https:" ? "wss:" : "ws:";
+        var wsUrl = proto + "//" + location.host + "/ws/session?sessionId=" + encodeURIComponent(sessionId) + "&role=watch";
+        try {
+          var ws = new WebSocket(wsUrl);
+          ws.onopen = function () { setStatus("已连接"); };
+          ws.onmessage = function (event) { handleMessage(event.data); };
+          ws.onerror = function () { setStatus("连接错误"); };
+          ws.onclose = function () {
+            setStatus("连接断开，重连中");
+            setTimeout(connect, 2000);
+          };
+        } catch (e) {
+          setStatus("浏览器不支持同步");
+        }
+      }
+
+      render();
+      connect();
+    })();
+  </script>
+</body>
+</html>`;
+}
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -513,8 +731,26 @@ app.get("/api/session/:sessionId", (req, res) => {
   });
 });
 
+app.get("/w/:sessionId", (req, res) => {
+  const session = getSession(req.params.sessionId);
+  if (!session) {
+    res.status(404).send("session not found");
+    return;
+  }
+  res.status(200).set({ "Content-Type": "text/html; charset=utf-8" }).send(
+    renderWatchPage(req.params.sessionId),
+  );
+});
+
 app.get("/api/usage", (_req, res) => {
   res.json(getUsageSnapshot());
+});
+
+app.get("/api/stt/vocab-profiles", (_req, res) => {
+  res.json({
+    profiles: listSttVocabProfiles(),
+    defaultProfile: getDefaultProfileId(),
+  });
 });
 
 app.post("/api/usage/redeem", (req, res) => {
@@ -618,25 +854,33 @@ app.post(
         return;
       }
 
-      const dgResp = await fetch(
-        "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true",
+      const vocabProfile = normalizeProfileId(req.query.vocab || req.headers["x-stt-vocab-profile"]);
+      const dgListenUrl = buildDeepgramListenUrl(
         {
-          method: "POST",
-          headers: {
-            Authorization: `Token ${deepgramApiKey}`,
-            "Content-Type": req.headers["content-type"] || "audio/webm",
-          },
-          body: audioBuffer,
+          model: "nova-3",
+          smart_format: "true",
+          punctuate: "true",
         },
+        vocabProfile,
       );
+      const dgResp = await fetch(dgListenUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Token ${deepgramApiKey}`,
+          "Content-Type": req.headers["content-type"] || "audio/webm",
+        },
+        body: audioBuffer,
+      });
 
       if (!dgResp.ok) {
         const detail = await dgResp.text();
         throw new Error(`Deepgram request failed (${dgResp.status}): ${detail}`);
       }
       const dgData = await dgResp.json();
+      const applyReplacements = true;
       const transcript = normalizeTranscript(
         dgData?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() || "",
+        { profileId: vocabProfile, applyReplacements },
       );
       if (!transcript) {
         res.json({ transcript: "", answer: "未识别到有效语音内容。" });
@@ -667,6 +911,7 @@ export async function startServer(options = {}) {
   const usageDataDir =
     options.userDataDir || path.join(rootDir, ".data", "usage");
   initUsageQuota({ dataDir: usageDataDir });
+  initSttVocabulary();
 
   const activeVite = await setupClientServing({ isProduction, rootDir });
 
@@ -694,11 +939,15 @@ export async function startServer(options = {}) {
         console.log(`  PC:     http://localhost:${port}`);
         console.log(`  Mobile: http://${network.lanIp}:${port}`);
       }
+      const wecomBot = initWecomBot({
+        onChat: async (text) => askLlm(text, { modelChoice: "auto" }),
+      });
       resolve({
         port,
         httpServer,
         close: () =>
           new Promise((res, rej) => {
+            wecomBot.stop();
             httpServer.close((err) => (err ? rej(err) : res()));
           }),
       });
@@ -741,9 +990,22 @@ dgWss.on("connection", (clientWs, req) => {
 
   const requestUrl = new URL(req.url || "/ws/deepgram-stt", "http://localhost");
   const lang = requestUrl.searchParams.get("lang") || "zh-CN";
-  const applyEnglishTerms = lang === "zh-CN" || lang === "ja";
-  const dgUrl =
-    `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&model=nova-3&language=${encodeURIComponent(lang)}&endpointing=300&vad_events=true`;
+  const vocabProfile = normalizeProfileId(requestUrl.searchParams.get("vocab"));
+  const applyReplacements = lang === "zh-CN" || lang === "ja";
+  const dgUrl = buildDeepgramStreamUrl(
+    {
+      encoding: "linear16",
+      sample_rate: "16000",
+      channels: "1",
+      interim_results: "true",
+      punctuate: "true",
+      model: "nova-3",
+      language: lang,
+      endpointing: "300",
+      vad_events: "true",
+    },
+    vocabProfile,
+  );
   const dgWs = new WebSocket(dgUrl, {
     headers: { Authorization: `Token ${deepgramApiKey}` },
   });
@@ -756,7 +1018,10 @@ dgWss.on("connection", (clientWs, req) => {
     try {
       const msg = JSON.parse(raw.toString());
       const alt = msg?.channel?.alternatives?.[0];
-      const text = normalizeTranscript(alt?.transcript?.trim(), applyEnglishTerms);
+      const text = normalizeTranscript(alt?.transcript?.trim(), {
+        profileId: vocabProfile,
+        applyReplacements,
+      });
       if (!text) return;
       clientWs.send(
         JSON.stringify({

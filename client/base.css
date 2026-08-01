@@ -27,3 +27,91 @@ body {
   font-size: 0.9rem;
   background-color: var(--color-base);
 }
+
+.watch-readonly-status {
+  display: none;
+}
+
+@media (max-width: 320px), (max-height: 360px) {
+  .mobile-page {
+    background: #f3f4f6;
+    font-size: 12px;
+  }
+
+  .mobile-page-header {
+    padding: 0.35rem 0.5rem;
+  }
+
+  .mobile-page-header h1 {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
+    line-height: 1rem;
+  }
+
+  .mobile-page-status {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.65rem;
+    line-height: 0.85rem;
+  }
+
+  .mobile-page-main {
+    padding: 0.45rem 0.4rem 0.6rem !important;
+  }
+
+  .watch-readonly-status {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin-bottom: 0.4rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.45rem;
+    background: #ffffff;
+    color: #111827;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.68rem;
+    line-height: 0.9rem;
+  }
+
+  .watch-readonly-status strong,
+  .watch-readonly-status span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .watch-readonly-status span {
+    color: #4b5563;
+  }
+
+  .mobile-page-footer {
+    display: none !important;
+  }
+
+  .mobile-page .chat-window {
+    gap: 0.35rem;
+  }
+
+  .mobile-page .chat-message {
+    max-width: 100%;
+    border-radius: 0.45rem;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.72rem;
+    line-height: 1rem;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-page .chat-window > .text-gray-500 {
+    border: 1px solid #d1d5db;
+    border-radius: 0.45rem;
+    background: #ffffff;
+    color: #374151;
+    padding: 0.4rem 0.45rem;
+    font-size: 0.72rem;
+    line-height: 1rem;
+  }
+}

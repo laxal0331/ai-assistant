@@ -288,7 +288,7 @@ export default function ChatWindow({ events }) {
   const messages = useMemo(() => buildChatMessages(events || []), [events]);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="chat-window flex flex-col gap-3">
       {messages.length === 0 ? (
         <div className="text-gray-500">开始会话后，聊天内容会在这里显示。</div>
       ) : (
@@ -298,7 +298,7 @@ export default function ChatWindow({ events }) {
             className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div
-              className={`max-w-[95%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+              className={`chat-message max-w-[95%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
                 m.role === "user"
                   ? "bg-blue-100 text-blue-900"
                   : "bg-gray-100 text-gray-900"

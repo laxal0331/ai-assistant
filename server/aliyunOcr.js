@@ -73,6 +73,12 @@ function mapLanguageModeToOcrLanguages(languageMode) {
   return (LANGUAGE_MAP[languageMode] || LANGUAGE_MAP["zh-CN"]).join(",");
 }
 
+function isTimeoutError(error) {
+  const message = error?.message || String(error);
+  const code = error?.code || "";
+  return code.includes("Timeout") || message.includes("Timeout") || message.includes("timeout");
+}
+
 function formatOcrError(error) {
   const message = error?.message || String(error);
   const code = error?.code || "";
@@ -100,20 +106,38 @@ export async function recognizeImageBuffer(imageBuffer, languageMode = "zh-CN") 
   }
 
   const client = createClient();
-  const bodyStream = Buffer.isBuffer(imageBuffer) ? Readable.from(imageBuffer) : imageBuffer;
-  const request = new OcrApi20210707.RecognizeAllTextRequest({
-    body: bodyStream,
-    type: "MultiLang",
-    multiLanConfig: new OcrApi20210707.RecognizeAllTextRequestMultiLanConfig({
-      languages: mapLanguageModeToOcrLanguages(languageMode),
-    }),
+  const runtime = new $Util.RuntimeOptions({
+    connectTimeout: 10000,
+    readTimeout: 10000,
   });
-  const runtime = new $Util.RuntimeOptions({});
   let response;
-  try {
-    response = await client.recognizeAllTextWithOptions(request, runtime);
-  } catch (error) {
-    throw formatOcrError(error);
+  const languages = mapLanguageModeToOcrLanguages(languageMode);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const started = Date.now();
+    try {
+      const bodyStream = Buffer.isBuffer(imageBuffer) ? Readable.from(imageBuffer) : imageBuffer;
+      const request = new OcrApi20210707.RecognizeAllTextRequest({
+        body: bodyStream,
+        type: "MultiLang",
+        multiLanConfig: new OcrApi20210707.RecognizeAllTextRequestMultiLanConfig({
+          languages,
+        }),
+      });
+      response = await client.recognizeAllTextWithOptions(request, runtime);
+      console.log(
+        `aliyun ocr success: attempt=${attempt}, bytes=${imageBuffer.length}, elapsedMs=${Date.now() - started}`,
+      );
+      break;
+    } catch (error) {
+      console.warn(
+        `aliyun ocr failed: attempt=${attempt}, bytes=${imageBuffer.length}, elapsedMs=${Date.now() - started}, error=${error?.message || String(error)}`,
+      );
+      if (attempt < 2 && isTimeoutError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      throw formatOcrError(error);
+    }
   }
   const data = response?.body?.data;
   const text = extractTextFromPayload(data);

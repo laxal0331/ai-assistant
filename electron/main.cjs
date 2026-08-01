@@ -7,6 +7,7 @@ const {
   Menu,
   ipcMain,
   nativeImage,
+  Notification,
   screen,
   session,
   shell,
@@ -19,7 +20,9 @@ const { getTrayIcon } = require("./trayIcon.cjs");
 const {
   DEFAULT_ACCELERATOR,
   loadScreenshotHotkey,
+  loadScreenshotSilentSend,
   saveScreenshotHotkey,
+  saveScreenshotSilentSend,
 } = require("./screenshotHotkey.cjs");
 
 let mainWindow = null;
@@ -28,6 +31,7 @@ let serverHandle = null;
 let isQuitting = false;
 let screenshotHotkey = DEFAULT_ACCELERATOR;
 let screenshotHotkeyLabel = "Ctrl+S";
+let screenshotSilentSend = false;
 
 function getAppRoot() {
   return app.getAppPath();
@@ -189,9 +193,16 @@ async function triggerScreenshotToAi() {
   if (!mainWindow) return;
   const imageBase64 = await captureFullScreenScreenshot();
   if (!imageBase64) return;
-  mainWindow.show();
-  mainWindow.focus();
+  if (!screenshotSilentSend) {
+    mainWindow.show();
+    mainWindow.focus();
+  }
   mainWindow.webContents.send("desktop-screenshot", { imageBase64 });
+}
+
+function showDesktopNotification(title, body) {
+  if (!Notification.isSupported()) return;
+  new Notification({ title: title || "AI Assistant", body: body || "" }).show();
 }
 
 function registerShortcuts() {
@@ -211,6 +222,7 @@ function refreshScreenshotHotkey() {
   const loaded = loadScreenshotHotkey();
   screenshotHotkey = loaded.accelerator;
   screenshotHotkeyLabel = loaded.label;
+  screenshotSilentSend = loadScreenshotSilentSend();
 }
 
 function updateTrayHotkeyLabel() {
@@ -236,6 +248,20 @@ ipcMain.on("desktop-get-screenshot-hotkey", (event) => {
     accelerator: screenshotHotkey,
     label: screenshotHotkeyLabel,
   };
+});
+
+ipcMain.on("desktop-get-screenshot-silent-send", (event) => {
+  event.returnValue = screenshotSilentSend;
+});
+
+ipcMain.handle("desktop-set-screenshot-silent-send", (_event, enabled) => {
+  screenshotSilentSend = saveScreenshotSilentSend(enabled);
+  return { ok: true, enabled: screenshotSilentSend };
+});
+
+ipcMain.handle("desktop-show-notification", (_event, payload) => {
+  showDesktopNotification(payload?.title, payload?.body);
+  return { ok: true };
 });
 
 ipcMain.handle("desktop-set-screenshot-hotkey", (_event, accelerator) => {

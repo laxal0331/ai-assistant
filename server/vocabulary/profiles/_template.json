@@ -1,0 +1,22 @@
+{
+  "id": "your-profile-id",
+  "label": "显示名称（例如：数据分析）",
+  "description": "简要说明该 profile 的适用场景。",
+  "primaryKeyterms": [
+    "在此填写该岗位最高频、最易听错的术语（会优先发给 Deepgram）"
+  ],
+  "replacements": [
+    {
+      "from": "听错写法",
+      "to": "正确术语",
+      "wordBoundary": false,
+      "ignoreCase": false,
+      "_comment": "英文拆词可加 wordBoundary: true 与 ignoreCase: true；中文一般省略这两项"
+    }
+  ],
+  "_notes": [
+    "复制本文件为 profiles/<id>.json 并在 server/vocabulary/index.js 的 PROFILE_IDS 中注册。",
+    "secondaryKeyterms 与通用 replacements 来自 profiles/_common.json，无需重复填写。",
+    "Deepgram keyterm 单次请求有数量上限，primary 会先于 secondary 发送。"
+  ]
+}
