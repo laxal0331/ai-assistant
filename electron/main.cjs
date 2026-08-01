@@ -50,6 +50,15 @@ function ensureUserEnvFile() {
   return userEnvPath;
 }
 
+function enableWindowCaptureProtection(window) {
+  if (process.platform !== "win32" || !window || window.isDestroyed()) return;
+  try {
+    window.setContentProtection(true);
+  } catch (error) {
+    console.error("failed to enable window capture protection:", error);
+  }
+}
+
 function setupSystemAudioCapture() {
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
@@ -112,9 +121,11 @@ function createMainWindow(port) {
     },
   });
 
+  enableWindowCaptureProtection(mainWindow);
   mainWindow.loadURL(`http://127.0.0.1:${port}/`);
 
   mainWindow.once("ready-to-show", () => {
+    enableWindowCaptureProtection(mainWindow);
     mainWindow.show();
   });
 
@@ -131,6 +142,7 @@ function buildTrayMenu() {
       label: "显示主窗口",
       click: () => {
         if (!mainWindow) return;
+        enableWindowCaptureProtection(mainWindow);
         mainWindow.show();
         mainWindow.focus();
       },
@@ -167,6 +179,7 @@ function createTray() {
   tray.setContextMenu(buildTrayMenu());
   tray.on("double-click", () => {
     if (!mainWindow) return;
+    enableWindowCaptureProtection(mainWindow);
     mainWindow.show();
     mainWindow.focus();
   });
@@ -261,6 +274,7 @@ app.whenReady().then(bootstrap);
 
 app.on("activate", () => {
   if (mainWindow) {
+    enableWindowCaptureProtection(mainWindow);
     mainWindow.show();
     mainWindow.focus();
   }
