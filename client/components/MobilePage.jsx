@@ -4,9 +4,22 @@ import Button from "./Button";
 import { useSessionSync } from "../hooks/useSessionSync";
 import { loadLlmModelChoice } from "../lib/llmModels";
 
+const AUTO_SCROLL_THRESHOLD_PX = 80;
+const RESUME_CONTEXT_ENABLED_KEY = "resume_context_enabled";
+const RESUME_SUMMARY_KEY = "resume_summary";
+
+function isNearScrollBottom(container) {
+  return (
+    container.scrollHeight - container.scrollTop - container.clientHeight <=
+    AUTO_SCROLL_THRESHOLD_PX
+  );
+}
+
 export default function MobilePage({ sessionId }) {
   const [message, setMessage] = useState("");
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const chatScrollRef = useRef(null);
+  const shouldAutoScrollRef = useRef(true);
   const sync = useSessionSync({ role: "mobile", sessionId });
   const statusText = sync.connectionError
     ? sync.connectionError
@@ -14,11 +27,40 @@ export default function MobilePage({ sessionId }) {
       ? "已连接"
       : "连接中";
 
+  function updateAutoScrollState() {
+    const container = chatScrollRef.current;
+    if (!container) return;
+    const nearBottom = isNearScrollBottom(container);
+    shouldAutoScrollRef.current = nearBottom;
+    setShowScrollToBottom(!nearBottom);
+  }
+
+  function scrollToBottom({ behavior = "auto" } = {}) {
+    const container = chatScrollRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior });
+    shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
+  }
+
   useEffect(() => {
     const container = chatScrollRef.current;
     if (!container) return undefined;
+    const handleScroll = () => updateAutoScrollState();
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    updateAutoScrollState();
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    const container = chatScrollRef.current;
+    if (!container) return undefined;
+    if (!shouldAutoScrollRef.current) {
+      setShowScrollToBottom(true);
+      return undefined;
+    }
     const frame = window.requestAnimationFrame(() => {
-      container.scrollTop = container.scrollHeight;
+      scrollToBottom();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [sync.events]);
@@ -26,9 +68,16 @@ export default function MobilePage({ sessionId }) {
   function handleSend() {
     const t = message.trim();
     if (!t) return;
-    sync.sendChat(t, { source: "mobile", modelChoice: loadLlmModelChoice() }).catch((err) => {
-      window.alert(err?.message || String(err));
-    });
+    sync
+      .sendChat(t, {
+        source: "mobile",
+        modelChoice: loadLlmModelChoice(),
+        useResumeContext: window.localStorage.getItem(RESUME_CONTEXT_ENABLED_KEY) === "true",
+        resumeSummary: window.localStorage.getItem(RESUME_SUMMARY_KEY) || "",
+      })
+      .catch((err) => {
+        window.alert(err?.message || String(err));
+      });
     setMessage("");
   }
 
@@ -56,6 +105,15 @@ export default function MobilePage({ sessionId }) {
         </div>
         <ChatWindow events={sync.events} />
       </main>
+      {showScrollToBottom ? (
+        <button
+          type="button"
+          onClick={() => scrollToBottom({ behavior: "smooth" })}
+          className="fixed right-4 bottom-20 z-30 rounded-full bg-gray-900 px-3 py-1.5 text-xs text-white shadow-lg hover:bg-gray-700"
+        >
+          回到最新
+        </button>
+      ) : null}
 
       <footer className="mobile-page-footer fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] flex gap-2">
         <input

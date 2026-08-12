@@ -128,9 +128,9 @@ async function renderClientPage(url, { isProduction, rootDir, activeVite }) {
 function buildChatPrompt(userText, options = {}) {
   const { useResumeContext = false, resumeSummary = "" } = options;
   const injectedResume = (resumeSummary || latestResumeSummary || "").trim();
-  const shouldUseResume = useResumeContext && injectedResume && isResumeRelated(userText);
+  const shouldUseResume = useResumeContext && injectedResume;
   return shouldUseResume
-    ? `${systemPrompt}\n\n补充约束：仅当问题涉及候选人经历时，参考以下简历摘要回答；若是基础通识题，按通用标准答案回答，不要强行套简历。\n\n简历摘要：\n${injectedResume}`
+    ? `${systemPrompt}\n\n补充约束：用户已启用参考资料上下文。请优先结合以下参考资料回答；如果问题与资料关系不明显，先说明资料中没有直接信息，再用通用知识补充，不要编造资料里不存在的经历或结论。\n\n参考资料摘要：\n${injectedResume}`
     : systemPrompt;
 }
 

@@ -20,6 +20,16 @@ import { keyboardEventToAccelerator } from "../lib/screenshotHotkey";
 const TARGET_SR = 16000;
 const SYNC_SESSION_KEY = "sync_session_id";
 const MIC_PAUSE_ACCELERATOR = "Control+X";
+const AUTO_SCROLL_THRESHOLD_PX = 80;
+const RESUME_CONTEXT_ENABLED_KEY = "resume_context_enabled";
+const RESUME_SUMMARY_KEY = "resume_summary";
+
+function isNearScrollBottom(container) {
+  return (
+    container.scrollHeight - container.scrollTop - container.clientHeight <=
+    AUTO_SCROLL_THRESHOLD_PX
+  );
+}
 
 function isEditableTarget(target) {
   if (!target || typeof target !== "object") return false;
@@ -64,8 +74,14 @@ export default function App() {
   const [minSendChars, setMinSendChars] = useState(6);
   const [languageMode, setLanguageMode] = useState("zh-CN");
   const [sttVocabProfile, setSttVocabProfile] = useState(() => loadSttVocabProfile());
-  const [useResumeContext, setUseResumeContext] = useState(false);
-  const [resumeSummary, setResumeSummary] = useState("");
+  const [useResumeContext, setUseResumeContext] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(RESUME_CONTEXT_ENABLED_KEY) === "true";
+  });
+  const [resumeSummary, setResumeSummary] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(RESUME_SUMMARY_KEY) || "";
+  });
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [llmModelChoice, setLlmModelChoice] = useState(() => loadLlmModelChoice());
@@ -73,6 +89,7 @@ export default function App() {
   const [activeAudioSource, setActiveAudioSource] = useState("none");
   const [micTranscriptionPaused, setMicTranscriptionPaused] = useState(false);
   const [screenshotSilentSend, setScreenshotSilentSend] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   const sync = useSessionSync({
     role: "pc",
@@ -95,6 +112,7 @@ export default function App() {
   const autoSendEnabledRef = useRef(false);
   const minSendCharsRef = useRef(6);
   const chatScrollContainer = useRef(null);
+  const shouldAutoScrollChatRef = useRef(true);
   const activeAudioSourceRef = useRef("none");
   const transcriptSyncTimerRef = useRef(null);
   const sendMessageWithImagesRef = useRef(null);
@@ -474,6 +492,22 @@ export default function App() {
     }
   }
 
+  function updateChatAutoScrollState() {
+    const container = chatScrollContainer.current;
+    if (!container) return;
+    const nearBottom = isNearScrollBottom(container);
+    shouldAutoScrollChatRef.current = nearBottom;
+    setShowScrollToBottom(!nearBottom);
+  }
+
+  function scrollChatToBottom({ behavior = "auto" } = {}) {
+    const container = chatScrollContainer.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior });
+    shouldAutoScrollChatRef.current = true;
+    setShowScrollToBottom(false);
+  }
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem("auto_send_enabled");
@@ -566,6 +600,16 @@ export default function App() {
   }, [sttVocabProfile]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(RESUME_CONTEXT_ENABLED_KEY, String(useResumeContext));
+  }, [useResumeContext]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(RESUME_SUMMARY_KEY, resumeSummary);
+  }, [resumeSummary]);
+
+  useEffect(() => {
     if (!isSessionActive) return;
     if (!["system", "mic"].includes(activeAudioSourceRef.current)) return;
     if (!captureStream.current) return;
@@ -577,9 +621,25 @@ export default function App() {
   }, [languageMode, sttVocabProfile, isSessionActive]);
 
   useEffect(() => {
-    if (chatScrollContainer.current) {
-      chatScrollContainer.current.scrollTop = chatScrollContainer.current.scrollHeight;
+    const container = chatScrollContainer.current;
+    if (!container) return undefined;
+    const handleScroll = () => updateChatAutoScrollState();
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    updateChatAutoScrollState();
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    const container = chatScrollContainer.current;
+    if (!container) return undefined;
+    if (!shouldAutoScrollChatRef.current) {
+      setShowScrollToBottom(true);
+      return undefined;
     }
+    const frame = window.requestAnimationFrame(() => {
+      scrollChatToBottom();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [sync.events]);
 
   return (
@@ -637,10 +697,19 @@ export default function App() {
         connectionError={sync.connectionError}
         onCreateOrOpen={createOrRefreshMobileSession}
       />
-      <main className="flex-1 min-h-0 flex flex-col">
+      <main className="relative flex-1 min-h-0 flex flex-col">
         <section ref={chatScrollContainer} className="flex-1 min-h-0 px-4 py-2 overflow-y-auto">
           <ChatWindow events={sync.events} />
         </section>
+        {showScrollToBottom ? (
+          <button
+            type="button"
+            onClick={() => scrollChatToBottom({ behavior: "smooth" })}
+            className="absolute right-5 bottom-24 z-10 rounded-full bg-gray-900 px-3 py-1.5 text-xs text-white shadow-lg hover:bg-gray-700"
+          >
+            回到最新
+          </button>
+        ) : null}
         <section className="shrink-0 px-4 pb-4">
           <SessionControls
             startSession={startSession}
