@@ -115,7 +115,7 @@ export default function App() {
   const shouldAutoScrollChatRef = useRef(true);
   const activeAudioSourceRef = useRef("none");
   const transcriptSyncTimerRef = useRef(null);
-  const sendMessageWithImagesRef = useRef(null);
+  const sendScreenshotToVisionRef = useRef(null);
   const micTranscriptionPausedRef = useRef(false);
   const screenshotSilentSendRef = useRef(false);
 
@@ -432,7 +432,38 @@ export default function App() {
       setComposerBusy(false);
     }
   }
-  sendMessageWithImagesRef.current = sendMessageWithImages;
+  async function sendScreenshotToVision({ imageBase64, silentUi = false } = {}) {
+    if (!imageBase64) return;
+
+    try {
+      if (!isSessionActive) {
+        await startSession({ audioSource: "none" });
+      }
+
+      await ensureEnoughCredits(1);
+      const sessionId = await sync.ensureSession();
+      const blob = await fetch(imageBase64).then((response) => response.blob());
+      const formData = new FormData();
+      formData.append("sessionId", sessionId);
+      formData.append("text", "请解答图中内容，先给结论再给要点。");
+      formData.append("source", "pc");
+      formData.append("useResumeContext", String(useResumeContext));
+      formData.append("resumeSummary", resumeSummary);
+      formData.append("image", blob, `screenshot-${Date.now()}.jpg`);
+
+      const response = await fetch("/api/vision-chat", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `截图发送失败（${response.status}）`);
+      }
+    } catch (error) {
+      reportComposerError(error?.message || String(error), silentUi);
+    }
+  }
+  sendScreenshotToVisionRef.current = sendScreenshotToVision;
 
   async function uploadResumeMd(file) {
     const text = await file.text();
@@ -552,14 +583,8 @@ export default function App() {
     if (typeof window === "undefined" || !window.desktopApp?.onScreenshot) return undefined;
     return window.desktopApp.onScreenshot(async ({ imageBase64 }) => {
       try {
-        const blob = await fetch(imageBase64).then((response) => response.blob());
-        const isJpeg = blob.type === "image/jpeg";
-        const file = new File([blob], `screenshot-${Date.now()}.${isJpeg ? "jpg" : "png"}`, {
-          type: blob.type || "image/png",
-        });
-        await sendMessageWithImagesRef.current?.({
-          text: "请解答图中内容，先给结论再给要点。",
-          files: [file],
+        await sendScreenshotToVisionRef.current?.({
+          imageBase64,
           silentUi: screenshotSilentSendRef.current,
         });
       } catch (error) {

@@ -1,6 +1,6 @@
 const { screen, desktopCapturer } = require("electron");
 
-const OCR_SCREENSHOT_MAX_DIMENSION = 1920;
+const OCR_SCREENSHOT_MAX_DIMENSION = 1440;
 const OCR_SCREENSHOT_JPEG_QUALITY = 85;
 
 function imageToJpegDataUrl(image) {

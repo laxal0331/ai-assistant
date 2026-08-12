@@ -54,7 +54,7 @@ let serverPort = Number(process.env.PORT) || 3000;
 const app = express();
 const httpServer = createServer(app);
 app.use(express.json({ limit: "2mb" }));
-const ocrUpload = multer({
+const imageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
@@ -65,7 +65,11 @@ const cerebrasModel = process.env.CEREBRAS_MODEL || "llama3.1-8b";
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
 const deepseekModel = process.env.DEEPSEEK_MODEL || "deepseek-chat";
 const deepseekBaseUrl = (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "");
+const dashscopeApiKey = process.env.DASHSCOPE_API_KEY || "";
+const qwenBaseUrl = (process.env.QWEN_BASE_URL || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
+const qwenVlModel = process.env.QWEN_VL_MODEL || "qwen3-vl-flash";
 const llmMaxTokens = Number(process.env.LLM_MAX_TOKENS) || 400;
+const qwenVlMaxTokens = Number(process.env.QWEN_VL_MAX_TOKENS) || llmMaxTokens;
 const llmProviderOrder = (process.env.LLM_PROVIDER_ORDER || "cerebras,deepseek")
   .split(",")
   .map((s) => s.trim().toLowerCase())
@@ -220,6 +224,46 @@ function buildLlmRequestBody(provider, prompt, userText, stream) {
   return body;
 }
 
+function normalizeImageDataUrl(imageBase64) {
+  const value = String(imageBase64 || "").trim();
+  if (!value) return "";
+  if (/^data:image\/(png|jpe?g|webp);base64,/i.test(value)) return value;
+  return "";
+}
+
+function imageBufferToDataUrl(buffer, mimeType = "image/jpeg") {
+  if (!buffer?.length) return "";
+  const safeMimeType = /^image\/(png|jpe?g|webp)$/i.test(mimeType)
+    ? mimeType
+    : "image/jpeg";
+  return `data:${safeMimeType};base64,${buffer.toString("base64")}`;
+}
+
+function buildVisionRequestBody(prompt, userText, imageDataUrl, stream) {
+  const body = {
+    model: qwenVlModel,
+    messages: [
+      { role: "system", content: prompt },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: imageDataUrl },
+          },
+          {
+            type: "text",
+            text: userText,
+          },
+        ],
+      },
+    ],
+    max_tokens: qwenVlMaxTokens,
+  };
+  if (stream) body.stream = true;
+  return body;
+}
+
 async function readSseCompletion(resp, onChunk) {
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
@@ -277,6 +321,42 @@ async function callLlmProvider(provider, userText, options, { stream = false, on
   return data?.choices?.[0]?.message?.content?.trim() || "";
 }
 
+async function callQwenVision(userText, options, { stream = false, onChunk } = {}) {
+  if (!dashscopeApiKey) {
+    throw new Error("Missing DASHSCOPE_API_KEY for Qwen vision");
+  }
+  const imageDataUrl = normalizeImageDataUrl(options.imageBase64);
+  if (!imageDataUrl) {
+    throw new Error("Invalid image payload for Qwen vision");
+  }
+
+  const prompt = buildChatPrompt(userText, options);
+  const started = Date.now();
+  const resp = await fetch(`${qwenBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${dashscopeApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(buildVisionRequestBody(prompt, userText, imageDataUrl, stream)),
+  });
+
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(formatLlmError("Qwen-VL", resp.status, detail));
+  }
+
+  if (stream) {
+    const answer = await readSseCompletion(resp, onChunk);
+    console.log(`Qwen-VL success: model=${qwenVlModel}, elapsedMs=${Date.now() - started}`);
+    return answer;
+  }
+
+  const data = await resp.json();
+  console.log(`Qwen-VL success: model=${qwenVlModel}, elapsedMs=${Date.now() - started}`);
+  return data?.choices?.[0]?.message?.content?.trim() || "";
+}
+
 async function askLlm(userText, options = {}) {
   const providers = resolveLlmProviders(options.modelChoice);
   if (!providers.length) {
@@ -324,6 +404,13 @@ async function streamLlm(userText, options, onChunk) {
     }
   }
   throw lastError;
+}
+
+async function streamVisionLlm(userText, options, onChunk) {
+  return callQwenVision(userText, options, {
+    stream: true,
+    onChunk,
+  });
 }
 
 function makeUserEvent(text, source = "pc") {
@@ -394,13 +481,14 @@ async function handleSessionChatSend(session, msg) {
 
   const responseId = crypto.randomUUID();
   try {
+    const llmOptions = {
+      useResumeContext: Boolean(msg.useResumeContext),
+      resumeSummary: msg.resumeSummary || "",
+      modelChoice: msg.modelChoice || "auto",
+    };
     const answer = await streamLlm(
       text,
-      {
-        useResumeContext: Boolean(msg.useResumeContext),
-        resumeSummary: msg.resumeSummary || "",
-        modelChoice: msg.modelChoice || "auto",
-      },
+      llmOptions,
       (chunk) => {
         broadcast(session, {
           type: "response.delta",
@@ -429,6 +517,87 @@ async function handleSessionChatSend(session, msg) {
     });
   } catch (error) {
     console.error("session chat error:", error);
+    const errEvent = makeAssistantEvent(`请求失败：${error.message || error}`);
+    appendEvent(session, errEvent);
+    broadcast(session, {
+      type: "response.done",
+      response_id: responseId,
+      event: errEvent,
+    });
+  } finally {
+    session.busy = false;
+  }
+}
+
+async function handleSessionVisionChat(session, msg) {
+  if (session.busy) {
+    broadcast(session, {
+      type: "system.error",
+      text: "上一条消息仍在处理中，请稍候。",
+    });
+    return;
+  }
+
+  const text = (msg.text || "").trim();
+  const imageBase64 = normalizeImageDataUrl(msg.imageBase64);
+  if (!text || !imageBase64) return;
+
+  const creditCost = computeChatCreditCost({
+    useResumeContext: Boolean(msg.useResumeContext),
+    imageCount: 1,
+  });
+  const quotaCheck = checkCanConsume(creditCost);
+  if (!quotaCheck.ok) {
+    broadcast(session, {
+      type: "system.error",
+      text: quotaCheck.message,
+    });
+    return;
+  }
+
+  session.busy = true;
+  const userEvent = makeUserEvent(`${text}\n[screenshot]`, msg.source || "pc");
+  appendEvent(session, userEvent);
+  broadcast(session, { type: "event.append", event: userEvent });
+
+  const responseId = crypto.randomUUID();
+  try {
+    const answer = await streamVisionLlm(
+      text,
+      {
+        useResumeContext: Boolean(msg.useResumeContext),
+        resumeSummary: msg.resumeSummary || "",
+        modelChoice: "qwen-vl",
+        imageBase64,
+      },
+      (chunk) => {
+        broadcast(session, {
+          type: "response.delta",
+          event_id: crypto.randomUUID(),
+          response_id: responseId,
+          delta: { text: chunk },
+        });
+      },
+    );
+
+    if (isQuotaEnabled()) {
+      consumeCredits(creditCost, {
+        source: msg.source || "pc",
+        useResumeContext: Boolean(msg.useResumeContext),
+        imageCount: 1,
+      });
+      broadcastUsageUpdate(session);
+    }
+
+    const doneEvent = makeAssistantEvent(answer || "未生成回复。");
+    appendEvent(session, doneEvent);
+    broadcast(session, {
+      type: "response.done",
+      response_id: responseId,
+      event: doneEvent,
+    });
+  } catch (error) {
+    console.error("session vision chat error:", error);
     const errEvent = makeAssistantEvent(`请求失败：${error.message || error}`);
     appendEvent(session, errEvent);
     broadcast(session, {
@@ -809,7 +978,48 @@ app.post("/api/chat-text", async (req, res) => {
   }
 });
 
-app.post("/api/ocr", ocrUpload.single("image"), async (req, res) => {
+app.post("/api/vision-chat", imageUpload.single("image"), (req, res) => {
+  try {
+    const session = getSession(req.body?.sessionId);
+    if (!session) {
+      res.status(404).json({ error: "session not found" });
+      return;
+    }
+    if (session.busy) {
+      res.status(409).json({ error: "busy" });
+      return;
+    }
+    if (!req.file?.buffer?.length) {
+      res.status(400).json({ error: "image is required" });
+      return;
+    }
+    const imageBase64 = imageBufferToDataUrl(req.file.buffer, req.file.mimetype);
+    if (!imageBase64) {
+      res.status(400).json({ error: "unsupported image" });
+      return;
+    }
+
+    res.json({ ok: true });
+    handleSessionVisionChat(session, {
+      text: req.body?.text || "请解答图中内容，先给结论再给要点。",
+      imageBase64,
+      source: req.body?.source || "pc",
+      useResumeContext: req.body?.useResumeContext === "true",
+      resumeSummary: req.body?.resumeSummary || "",
+    }).catch((error) => {
+      console.error("vision chat background error:", error);
+      broadcast(session, {
+        type: "system.error",
+        text: `请求失败：${error.message || error}`,
+      });
+    });
+  } catch (error) {
+    console.error("vision-chat error:", error);
+    res.status(500).json({ error: error.message || "vision chat failed" });
+  }
+});
+
+app.post("/api/ocr", imageUpload.single("image"), async (req, res) => {
   try {
     if (!req.file?.buffer?.length) {
       res.status(400).json({ error: "请上传图片" });

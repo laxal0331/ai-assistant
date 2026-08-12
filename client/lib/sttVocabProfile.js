@@ -2,6 +2,8 @@ export const STT_VOCAB_PROFILE_OPTIONS = [
   { value: "frontend", label: "前端开发" },
   { value: "backend", label: "后端开发" },
   { value: "agent-fullstack", label: "Agent / 全栈" },
+  { value: "ops-support", label: "运维 / 实施 / 技术支持" },
+  { value: "testing", label: "测试" },
 ];
 
 const STT_VOCAB_PROFILE_STORAGE_KEY = "stt_vocab_profile";

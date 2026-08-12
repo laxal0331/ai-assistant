@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILES_DIR = path.join(__dirname, "profiles");
 
-export const PROFILE_IDS = ["frontend", "backend", "agent-fullstack"];
+export const PROFILE_IDS = ["frontend", "backend", "agent-fullstack", "ops-support", "testing"];
 
 const DEFAULT_PROFILE_ID = (process.env.STT_VOCAB_PROFILE || "backend").trim();
 // Deepgram Nova-3：keyterm 按 token 上限（约 500），不是「95 个词」。
