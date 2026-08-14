@@ -108,7 +108,7 @@ export function normalizeDeviceLabel(label) {
 
 export function computeChatCreditCost(options = {}) {
   const imageCount = Math.max(0, Number(options.imageCount) || 0);
-  let cost = imageCount > 0 ? imageCount : 1;
+  let cost = imageCount > 0 ? imageCount * 2 : 1;
   if (options.useResumeContext) {
     cost *= 2;
   }
@@ -127,6 +127,7 @@ export function getUsageSnapshot() {
     remaining,
     resumeContextCost: 2,
     defaultQuestionCost: 1,
+    imageQuestionCost: 2,
   };
 }
 

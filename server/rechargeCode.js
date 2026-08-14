@@ -3,10 +3,9 @@ import crypto from "crypto";
 const CODE_PREFIX = "AIASSIST";
 
 export const RECHARGE_PACKAGES = {
-  trial: { credits: 10, label: "体验", priceHint: "¥5 / 10 次" },
-  regular: { credits: 50, label: "常规", priceHint: "¥20 / 50 次" },
-  common: { credits: 100, label: "常用", priceHint: "¥35 / 100 次" },
-  heavy: { credits: 200, label: "重度", priceHint: "¥60 / 200 次" },
+  trial: { credits: 30, label: "体验包", priceHint: "¥9.9 / 30 次" },
+  standard: { credits: 150, label: "标准包", priceHint: "¥29.9 / 150 次，主推" },
+  heavy: { credits: 400, label: "高频包", priceHint: "¥59.9 / 400 次，推荐" },
 };
 
 export function normalizeDeviceLabel(label) {

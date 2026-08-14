@@ -178,7 +178,7 @@ export default function SettingsPanel({
             </span>
           </div>
           <p className="text-xs text-gray-500 leading-relaxed">
-            纯文字或 1 张图：消耗 1 次；同一消息每多 1 张图多扣 1 次（例如 2 张图扣 2 次）。勾选「启用参考资料上下文」时上述次数 ×2。新机器默认赠送 20 次体验。
+            纯文字：消耗 1 次；截图问 AI 或 1 张图片：消耗 2 次；同一消息每多 1 张图片多扣 2 次。勾选「启用参考资料上下文」时上述次数 ×2。新机器默认赠送 20 次体验。
           </p>
           <div className="flex flex-col gap-1">
             <span className="text-gray-700">充值码</span>
@@ -206,7 +206,7 @@ export default function SettingsPanel({
             ) : null}
           </div>
           <div className="text-xs text-gray-500 leading-relaxed border-t border-gray-200 pt-2">
-            套餐参考：体验 ¥5/10 次 · 常规 ¥20/50 次 · 常用 ¥35/100 次 · 重度 ¥60/200 次。
+            套餐参考：体验包 ¥9.9/30 次 · 标准包 ¥29.9/150 次（主推） · 高频包 ¥59.9/400 次（推荐）。
             充值码默认绑定本机标识，请将标识发给管理员后再兑换。
           </div>
         </div>
@@ -351,7 +351,7 @@ export default function SettingsPanel({
             />
             启用参考资料上下文
           </label>
-          <p className="text-xs text-gray-500 -mt-1">勾选后本次消耗次数 ×2（例如 2 张图从 2 次变为 4 次）。</p>
+          <p className="text-xs text-gray-500 -mt-1">勾选后本次消耗次数 ×2（例如 1 张图从 2 次变为 4 次）。</p>
           <label className="flex flex-col gap-1">
             <span className="text-gray-700">上传参考资料（.md / .txt）</span>
             <input

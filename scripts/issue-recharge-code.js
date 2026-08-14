@@ -14,20 +14,19 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 function printHelp() {
   console.log(`用法:
   node scripts/issue-recharge-code.js --credits 50 --device a3f8c2e1
-  node scripts/issue-recharge-code.js --package regular --device a3f8c2e1
+  node scripts/issue-recharge-code.js --package standard --device a3f8c2e1
   node scripts/issue-recharge-code.js --credits 50 --no-bind
 
 参数:
   --credits <n>       增加次数
-  --package <name>    套餐: trial | regular | common | heavy
+  --package <name>    套餐: trial | standard | heavy
   --device <label>    绑定本机标识前 8 位（默认绑定）
   --no-bind           不绑定设备（通用码）
 
 套餐参考:
-  trial    10 次   ${RECHARGE_PACKAGES.trial.priceHint}
-  regular  50 次   ${RECHARGE_PACKAGES.regular.priceHint}
-  common   100 次  ${RECHARGE_PACKAGES.common.priceHint}
-  heavy    200 次  ${RECHARGE_PACKAGES.heavy.priceHint}
+  trial     30 次   ${RECHARGE_PACKAGES.trial.priceHint}
+  standard  150 次  ${RECHARGE_PACKAGES.standard.priceHint}
+  heavy     400 次  ${RECHARGE_PACKAGES.heavy.priceHint}
 `);
 }
 
