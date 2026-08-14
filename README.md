@@ -109,7 +109,7 @@ npm run build
 npm run dist
 ```
 
-输出：`release/AI Assistant 1.0.0.exe`，目录版输出在 `release/win-unpacked/AI Assistant.exe`。
+输出：`release/AI Assistant 1.0.1.exe`，目录版输出在 `release/win-unpacked/AI Assistant.exe`。
 
 ## 常用脚本
 

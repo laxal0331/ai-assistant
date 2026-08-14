@@ -5,6 +5,7 @@ const {
   globalShortcut,
   Tray,
   Menu,
+  dialog,
   ipcMain,
   nativeImage,
   Notification,
@@ -77,6 +78,13 @@ function enableWindowCaptureProtection(window) {
   }
 }
 
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  enableWindowCaptureProtection(mainWindow);
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+}
+
 function setupSystemAudioCapture() {
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
@@ -118,6 +126,7 @@ async function startBackend() {
     production: process.env.NODE_ENV === "production",
     envPath,
     userDataDir: app.getPath("userData"),
+    port: 0,
   });
   return serverHandle.port;
 }
@@ -131,7 +140,7 @@ function createMainWindow(port) {
     center: true,
     title: "AI Assistant",
     icon: path.join(__dirname, "assets", "app-icon.png"),
-    show: false,
+    show: true,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -141,12 +150,24 @@ function createMainWindow(port) {
   });
 
   enableWindowCaptureProtection(mainWindow);
-  mainWindow.loadURL(`http://127.0.0.1:${port}/`);
+  showMainWindow();
+  mainWindow.loadURL(`http://127.0.0.1:${port}/`).then(() => {
+    showMainWindow();
+  }).catch((error) => {
+    dialog.showErrorBox("AI Assistant 页面加载失败", error?.message || String(error));
+  });
 
   mainWindow.once("ready-to-show", () => {
-    enableWindowCaptureProtection(mainWindow);
-    mainWindow.show();
+    showMainWindow();
   });
+
+  mainWindow.webContents.once("did-finish-load", () => {
+    showMainWindow();
+  });
+
+  setTimeout(() => {
+    showMainWindow();
+  }, 1200);
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
@@ -160,10 +181,7 @@ function buildTrayMenu() {
     {
       label: "显示主窗口",
       click: () => {
-        if (!mainWindow) return;
-        enableWindowCaptureProtection(mainWindow);
-        mainWindow.show();
-        mainWindow.focus();
+        showMainWindow();
       },
     },
     {
@@ -197,10 +215,7 @@ function createTray() {
   tray.setToolTip("AI Assistant");
   tray.setContextMenu(buildTrayMenu());
   tray.on("double-click", () => {
-    if (!mainWindow) return;
-    enableWindowCaptureProtection(mainWindow);
-    mainWindow.show();
-    mainWindow.focus();
+    showMainWindow();
   });
 }
 
@@ -284,8 +299,7 @@ async function triggerScreenshotToAi() {
   logScreenshotTiming(requestId, "capture complete", captureStartedAt);
   if (!imageBase64) return;
   if (!screenshotSilentSend) {
-    mainWindow.show();
-    mainWindow.focus();
+    showMainWindow();
   }
   try {
     const contextStartedAt = Date.now();
@@ -398,14 +412,20 @@ ipcMain.handle("desktop-set-screenshot-hotkey", (_event, accelerator) => {
   }
 });
 
-app.whenReady().then(bootstrap);
+app.whenReady().then(bootstrap).catch((error) => {
+  const message = error?.stack || error?.message || String(error);
+  try {
+    fs.appendFileSync(
+      path.join(app.getPath("userData"), "startup-error.log"),
+      `[${new Date().toISOString()}]\n${message}\n\n`,
+    );
+  } catch {}
+  dialog.showErrorBox("AI Assistant 启动失败", message);
+  app.quit();
+});
 
 app.on("activate", () => {
-  if (mainWindow) {
-    enableWindowCaptureProtection(mainWindow);
-    mainWindow.show();
-    mainWindow.focus();
-  }
+  showMainWindow();
 });
 
 app.on("will-quit", () => {

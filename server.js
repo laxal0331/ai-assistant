@@ -2,7 +2,6 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import { createServer } from "http";
-import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
@@ -105,6 +104,7 @@ async function setupClientServing({ isProduction, rootDir }) {
     app.use(express.static(path.join(rootDir, "dist/client"), { index: false }));
     return null;
   }
+  const { createServer: createViteServer } = await import("vite");
   vite = await createViteServer({
     server: {
       middlewareMode: true,
@@ -1141,7 +1141,11 @@ app.post(
 export async function startServer(options = {}) {
   const rootDir = options.rootDir || __dirname;
   const isProduction = options.production ?? process.env.NODE_ENV === "production";
-  serverPort = Number(options.port || process.env.PORT) || 3000;
+  const requestedPort =
+    Object.prototype.hasOwnProperty.call(options, "port")
+      ? Number(options.port)
+      : Number(process.env.PORT);
+  serverPort = Number.isFinite(requestedPort) && requestedPort >= 0 ? requestedPort : 3000;
   const port = serverPort;
 
   if (options.envPath) {
@@ -1174,17 +1178,19 @@ export async function startServer(options = {}) {
     httpServer.once("error", reject);
     httpServer.listen(port, "0.0.0.0", () => {
       httpServer.removeListener("error", reject);
-      const network = getNetworkInfo(port);
-      console.log(`Express server running on port ${port}`);
+      const actualPort = httpServer.address()?.port || port;
+      serverPort = actualPort;
+      const network = getNetworkInfo(actualPort);
+      console.log(`Express server running on port ${actualPort}`);
       if (network.lanIp) {
-        console.log(`  PC:     http://localhost:${port}`);
-        console.log(`  Mobile: http://${network.lanIp}:${port}`);
+        console.log(`  PC:     http://localhost:${actualPort}`);
+        console.log(`  Mobile: http://${network.lanIp}:${actualPort}`);
       }
       const wecomBot = initWecomBot({
         onChat: async (text) => askLlm(text, { modelChoice: "auto" }),
       });
       resolve({
-        port,
+        port: actualPort,
         httpServer,
         close: () =>
           new Promise((res, rej) => {

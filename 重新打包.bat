@@ -61,6 +61,10 @@ if errorlevel 1 (
 echo.
 echo Build complete.
 echo Output:
-echo   %cd%\release\AI Assistant 1.0.0.exe
+for /f "delims=" %%F in ('dir /b /a:-d /o:-d "%cd%\release\AI Assistant *.exe" 2^>nul') do (
+  echo   %cd%\release\%%F
+  goto :build_done
+)
+:build_done
 echo.
 pause
