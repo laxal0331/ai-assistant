@@ -65,6 +65,7 @@
       "electron/bin/*.exe"
     ],
     "win": {
+      "icon": "electron/assets/app-icon.ico",
       "target": [
         "portable"
       ],
