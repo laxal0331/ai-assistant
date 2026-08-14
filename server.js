@@ -71,7 +71,7 @@ const qwenBaseUrl = (process.env.QWEN_BASE_URL || "https://dashscope-intl.aliyun
 const qwenVlModel = process.env.QWEN_VL_MODEL || "qwen3-vl-flash";
 const llmMaxTokens = Number(process.env.LLM_MAX_TOKENS) || 400;
 const qwenVlMaxTokens = Number(process.env.QWEN_VL_MAX_TOKENS) || llmMaxTokens;
-const llmProviderOrder = (process.env.LLM_PROVIDER_ORDER || "cerebras,deepseek")
+const llmProviderOrder = (process.env.LLM_PROVIDER_ORDER || "deepseek")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
@@ -362,7 +362,7 @@ async function callQwenVision(userText, options, { stream = false, onChunk } = {
 async function askLlm(userText, options = {}) {
   const providers = resolveLlmProviders(options.modelChoice);
   if (!providers.length) {
-    throw new Error("Missing LLM API key: set CEREBRAS_API_KEY and/or DEEPSEEK_API_KEY");
+    throw new Error("Missing LLM API key: set DEEPSEEK_API_KEY");
   }
 
   let lastError;
@@ -385,7 +385,7 @@ async function askLlm(userText, options = {}) {
 async function streamLlm(userText, options, onChunk) {
   const providers = resolveLlmProviders(options.modelChoice);
   if (!providers.length) {
-    throw new Error("Missing LLM API key: set CEREBRAS_API_KEY and/or DEEPSEEK_API_KEY");
+    throw new Error("Missing LLM API key: set DEEPSEEK_API_KEY");
   }
 
   let lastError;
@@ -634,101 +634,6 @@ async function handleSessionVisionChat(session, msg) {
   } finally {
     session.busy = false;
     logScreenshotTiming(requestId, "vision chat complete", startedAt);
-  }
-}
-
-async function handleSessionOcrChat(session, msg) {
-  if (session.busy) {
-    broadcast(session, {
-      type: "system.error",
-      text: "上一条消息仍在处理中，请稍候。",
-    });
-    return;
-  }
-
-  const text = (msg.text || "").trim() || "请解答图中内容，先给结论再给要点。";
-  const imageBuffer = msg.imageBuffer;
-  if (!imageBuffer?.length) return;
-  const requestId = msg.requestId || "";
-  const startedAt = Date.now();
-  logScreenshotTiming(requestId, `ocr chat start bytes=${imageBuffer.length}`);
-
-  const creditCost = computeChatCreditCost({
-    useResumeContext: Boolean(msg.useResumeContext),
-    imageCount: 1,
-  });
-  const quotaCheck = checkCanConsume(creditCost);
-  if (!quotaCheck.ok) {
-    broadcast(session, {
-      type: "system.error",
-      text: quotaCheck.message,
-    });
-    return;
-  }
-
-  session.busy = true;
-  const userEvent = makeUserEvent(`${text}\n[screenshot]`, msg.source || "pc");
-  appendEvent(session, userEvent);
-  broadcast(session, { type: "event.append", event: userEvent });
-
-  const responseId = crypto.randomUUID();
-  try {
-    const ocrStartedAt = Date.now();
-    const ocrText = await recognizeImageBuffer(imageBuffer, msg.languageMode || "zh-CN");
-    logScreenshotTiming(requestId, `ocr complete chars=${ocrText.length}`, ocrStartedAt);
-    const llmText = `${text}\n\n${ocrText}`.trim();
-    const llmStartedAt = Date.now();
-    let firstTokenLogged = false;
-    const answer = await streamLlm(
-      llmText,
-      {
-        useResumeContext: Boolean(msg.useResumeContext),
-        resumeSummary: msg.resumeSummary || "",
-        modelChoice: msg.modelChoice || "auto",
-      },
-      (chunk) => {
-        if (!firstTokenLogged) {
-          firstTokenLogged = true;
-          logScreenshotTiming(requestId, "llm first token", llmStartedAt);
-        }
-        broadcast(session, {
-          type: "response.delta",
-          event_id: crypto.randomUUID(),
-          response_id: responseId,
-          delta: { text: chunk },
-        });
-      },
-    );
-    logScreenshotTiming(requestId, `llm complete chars=${answer.length}`, llmStartedAt);
-
-    if (isQuotaEnabled()) {
-      consumeCredits(creditCost, {
-        source: msg.source || "pc",
-        useResumeContext: Boolean(msg.useResumeContext),
-        imageCount: 1,
-      });
-      broadcastUsageUpdate(session);
-    }
-
-    const doneEvent = makeAssistantEvent(answer || "未生成回复。");
-    appendEvent(session, doneEvent);
-    broadcast(session, {
-      type: "response.done",
-      response_id: responseId,
-      event: doneEvent,
-    });
-  } catch (error) {
-    console.error("session ocr chat error:", error);
-    const errEvent = makeAssistantEvent(`请求失败：${error.message || error}`);
-    appendEvent(session, errEvent);
-    broadcast(session, {
-      type: "response.done",
-      response_id: responseId,
-      event: errEvent,
-    });
-  } finally {
-    session.busy = false;
-    logScreenshotTiming(requestId, "ocr chat complete", startedAt);
   }
 }
 
@@ -1141,47 +1046,6 @@ app.post("/api/vision-chat", imageUpload.single("image"), (req, res) => {
   } catch (error) {
     console.error("vision-chat error:", error);
     res.status(500).json({ error: error.message || "vision chat failed" });
-  }
-});
-
-app.post("/api/ocr-chat", imageUpload.single("image"), (req, res) => {
-  try {
-    const requestId = req.body?.requestId || "";
-    logScreenshotTiming(requestId, `api ocr-chat received bytes=${req.file?.buffer?.length || 0}`);
-    const session = getSession(req.body?.sessionId);
-    if (!session) {
-      res.status(404).json({ error: "session not found" });
-      return;
-    }
-    if (session.busy) {
-      res.status(409).json({ error: "busy" });
-      return;
-    }
-    if (!req.file?.buffer?.length) {
-      res.status(400).json({ error: "image is required" });
-      return;
-    }
-
-    res.json({ ok: true });
-    handleSessionOcrChat(session, {
-      requestId,
-      text: req.body?.text || "请解答图中内容，先给结论再给要点。",
-      imageBuffer: req.file.buffer,
-      source: req.body?.source || "pc",
-      languageMode: req.body?.languageMode || "zh-CN",
-      modelChoice: req.body?.modelChoice || "auto",
-      useResumeContext: req.body?.useResumeContext === "true",
-      resumeSummary: req.body?.resumeSummary || "",
-    }).catch((error) => {
-      console.error("ocr chat background error:", error);
-      broadcast(session, {
-        type: "system.error",
-        text: `请求失败：${error.message || error}`,
-      });
-    });
-  } catch (error) {
-    console.error("ocr-chat error:", error);
-    res.status(500).json({ error: error.message || "ocr chat failed" });
   }
 });
 

@@ -242,40 +242,6 @@ function requestScreenshotContext() {
   });
 }
 
-async function uploadScreenshotToOcrChat(imageBase64, context = {}) {
-  const sessionId = String(context.sessionId || "").trim();
-  if (!sessionId) {
-    throw new Error("截图会话未连接");
-  }
-  const blob = dataUrlToBlob(imageBase64);
-  if (!blob) {
-    throw new Error("截图图片无效");
-  }
-  const formData = new FormData();
-  formData.append("sessionId", sessionId);
-  formData.append("requestId", String(context.requestId || ""));
-  formData.append("text", "请解答图中内容，先给结论再给要点。");
-  formData.append("source", "pc");
-  formData.append("languageMode", String(context.languageMode || "zh-CN"));
-  formData.append("modelChoice", String(context.modelChoice || "auto"));
-  formData.append("useResumeContext", String(Boolean(context.useResumeContext)));
-  formData.append("resumeSummary", String(context.resumeSummary || ""));
-  formData.append("image", blob, `screenshot-${Date.now()}.jpg`);
-
-  const resp = await fetch(`http://127.0.0.1:${serverHandle.port}/api/ocr-chat`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!resp.ok) {
-    const data = await resp.json().catch(() => ({}));
-    throw new Error(data.error || `截图发送失败（${resp.status}）`);
-  }
-}
-
-function normalizeScreenshotAnalysisMode(value) {
-  return value === "vision" ? "vision" : "ocr";
-}
-
 async function uploadScreenshotToAi(imageBase64, context = {}) {
   const sessionId = String(context.sessionId || "").trim();
   if (!sessionId) {
@@ -297,9 +263,7 @@ async function uploadScreenshotToAi(imageBase64, context = {}) {
   formData.append("resumeSummary", String(context.resumeSummary || ""));
   formData.append("image", blob, `screenshot-${Date.now()}.jpg`);
 
-  const mode = normalizeScreenshotAnalysisMode(context.screenshotAnalysisMode);
-  const endpoint = mode === "vision" ? "/api/vision-chat" : "/api/ocr-chat";
-  const resp = await fetch(`http://127.0.0.1:${serverHandle.port}${endpoint}`, {
+  const resp = await fetch(`http://127.0.0.1:${serverHandle.port}/api/vision-chat`, {
     method: "POST",
     body: formData,
   });
@@ -307,7 +271,7 @@ async function uploadScreenshotToAi(imageBase64, context = {}) {
     const data = await resp.json().catch(() => ({}));
     throw new Error(data.error || `截图发送失败（${resp.status}）`);
   }
-  return mode;
+  return "vision";
 }
 
 async function triggerScreenshotToAi() {

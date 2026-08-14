@@ -28,8 +28,6 @@ export default function SettingsPanel({
   setAutoSendEnabled,
   screenshotSilentSend,
   setScreenshotSilentSend,
-  screenshotAnalysisMode,
-  setScreenshotAnalysisMode,
   useResumeContext,
   setUseResumeContext,
   resumeSummary,
@@ -338,19 +336,8 @@ export default function SettingsPanel({
                 onChange={(e) => setScreenshotSilentSend(e.target.checked)}
               />
               <span className="text-xs text-gray-600 leading-relaxed">
-                截图发送时不显示主窗口（后台 OCR 并问 AI，手机同步照常收到回答；失败时用系统通知提示）
+                截图发送时不显示主窗口（后台 Qwen 识图并问 AI，手机同步照常收到回答；失败时用系统通知提示）
               </span>
-            </label>
-            <label className="flex flex-col gap-1 mt-2">
-              <span className="text-gray-700">截图处理方式</span>
-              <select
-                value={screenshotAnalysisMode || "ocr"}
-                onChange={(e) => setScreenshotAnalysisMode(e.target.value)}
-                className="border border-gray-300 rounded-lg px-3 py-2 bg-white"
-              >
-                <option value="ocr">OCR 识字，速度快，只适合文字内容</option>
-                <option value="vision">Qwen 识图大模型，能理解画面，但更慢</option>
-              </select>
             </label>
           </div>
         ) : null}

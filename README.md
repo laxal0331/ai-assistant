@@ -11,8 +11,8 @@
 - 桌面：`Electron`（托盘、全局截图快捷键、Windows 系统环回音频、窗口防捕获）
 - 截图：Windows 原生截图助手 `native-capture.exe`，失败时回退 Electron `desktopCapturer`
 - 语音转写：`Deepgram`（Nova-3，岗位词库 keyterm + 事后纠正）
-- 大模型：`DeepSeek`（默认）、`Cerebras`（可选，自动 fallback）
-- 图片识别：阿里云 OCR 统一识别，或 `qwen3-vl-flash` 识图大模型
+- 大模型：`DeepSeek`（默认）；Cerebras 代码保留但默认不再使用
+- 图片识别：截图问 AI 默认使用 `qwen3-vl-flash`；独立图片 OCR 接口保留
 
 ## 功能说明
 
@@ -22,8 +22,8 @@
 - **自动发送**：静音 800ms 后发送；可设最小字数阈值
 - **麦克风暂停转写**：麦克风模式下 **Ctrl+X** 暂停/恢复转写，答题时避免误触发自动发送扣次
 - **截图问 AI**：桌面版默认快捷键 Ctrl+S；截图会压缩为 JPEG 75、最长边 1200px
-- **截图处理方式**：设置中可选 **OCR 识字**（默认，适合纯文字，通常更快）或 **Qwen 识图大模型**（能理解画面，但首字等待可能更慢）
-- **截图耗时日志**：截图捕获、OCR、普通 AI 回答、Qwen 首字与完整回答都会写入 `screenshot-timing.log`，便于定位卡顿
+- **截图处理方式**：截图问 AI 固定使用 **Qwen 识图大模型**，能直接理解画面和文字内容
+- **截图耗时日志**：截图捕获、Qwen 首字与完整回答都会写入 `screenshot-timing.log`，便于定位卡顿
 - **参考资料上下文**：上传 `.md/.txt` 摘要；涉及经历类问题时注入；勾选后扣次 ×2
 - **手机同步**：局域网扫码，手机看回答、发文字；同步弹窗可切换手机二维码 / 手表二维码
 - **Windows 防屏幕捕获**：桌面版启动后开启窗口内容保护，在支持的 Windows 版本上屏幕共享/录屏/截图会排除应用窗口
@@ -52,7 +52,7 @@
 - `Node.js >= 18`
 - Windows 桌面打包需要系统自带 .NET Framework C# 编译器（脚本会自动查找）
 - `DEEPGRAM_API_KEY`（转写）
-- `DEEPSEEK_API_KEY` 和/或 `CEREBRAS_API_KEY`（问答）
+- `DEEPSEEK_API_KEY`（问答）
 - 图片 OCR 需配置阿里云 AccessKey（见 `.env.example`）
 - Qwen 识图需配置 `DASHSCOPE_API_KEY`
 
@@ -66,7 +66,6 @@
 DEEPGRAM_API_KEY=
 DEEPSEEK_API_KEY=
 DEEPSEEK_MODEL=deepseek-v4-flash
-# CEREBRAS_API_KEY=
 # ALIBABA_CLOUD_ACCESS_KEY_ID=
 # ALIBABA_CLOUD_ACCESS_KEY_SECRET=
 # DASHSCOPE_API_KEY=
@@ -131,7 +130,6 @@ npm run dist
 - `GET /api/stt/vocab-profiles` — 转写岗位词库列表
 - `POST /api/chat-text` — 文本问答
 - `POST /api/ocr` — 图片 OCR
-- `POST /api/ocr-chat` — 截图先 OCR，再交给普通文字模型回答
 - `POST /api/vision-chat` — 截图直接交给 Qwen 识图模型回答
 - `POST /api/resume-md` — 上传参考资料并生成摘要
 - `POST /api/session` — 创建手机同步会话
@@ -151,8 +149,8 @@ npm run dist
 - **系统音频失败（浏览器）**：共享弹窗需勾选系统音频；桌面版依赖 Windows 环回，Mac 无同等能力
 - **打包失败 Access denied**：先结束所有 `AI Assistant` 进程，或直接双击 `重新打包.bat`
 - **改代码后 exe 仍是旧界面**：需重新打包，不能只做 `electron:dev`
-- **截图问 AI / OCR 慢或 ReadTimeout**：桌面截图会转 JPEG 75、最长边限制 1200px；截图捕获优先使用 Windows 原生截图助手，失败时才回退 Electron `desktopCapturer`。全屏复杂文字仍可能让 OCR 或视觉模型变慢，可在设置中切换 OCR / Qwen 识图并查看 `screenshot-timing.log`
-- **无回答 / 500**：检查 Deepgram、DeepSeek（或 Cerebras）、DashScope、阿里云 OCR Key 与网络
+- **截图问 AI 慢或超时**：桌面截图会转 JPEG 75、最长边限制 1200px；截图捕获优先使用 Windows 原生截图助手，失败时才回退 Electron `desktopCapturer`。全屏复杂内容仍可能让视觉模型变慢，可查看 `screenshot-timing.log`
+- **无回答 / 500**：检查 Deepgram、DeepSeek、DashScope、阿里云 OCR Key 与网络
 - **转写 400 / 1006**：多为 Deepgram keyterm 超限；默认已限制为 65 个岗位词，通用词靠事后纠正；仍失败则检查 `DEEPGRAM_API_KEY`
 
 ## 安全提示

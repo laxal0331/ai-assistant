@@ -23,7 +23,6 @@ const MIC_PAUSE_ACCELERATOR = "Control+X";
 const AUTO_SCROLL_THRESHOLD_PX = 80;
 const RESUME_CONTEXT_ENABLED_KEY = "resume_context_enabled";
 const RESUME_SUMMARY_KEY = "resume_summary";
-const SCREENSHOT_ANALYSIS_MODE_KEY = "screenshot_analysis_mode";
 
 function isNearScrollBottom(container) {
   return (
@@ -90,10 +89,6 @@ export default function App() {
   const [activeAudioSource, setActiveAudioSource] = useState("none");
   const [micTranscriptionPaused, setMicTranscriptionPaused] = useState(false);
   const [screenshotSilentSend, setScreenshotSilentSend] = useState(false);
-  const [screenshotAnalysisMode, setScreenshotAnalysisMode] = useState(() => {
-    if (typeof window === "undefined") return "ocr";
-    return window.localStorage.getItem(SCREENSHOT_ANALYSIS_MODE_KEY) || "ocr";
-  });
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   const sync = useSessionSync({
@@ -122,7 +117,6 @@ export default function App() {
   const transcriptSyncTimerRef = useRef(null);
   const micTranscriptionPausedRef = useRef(false);
   const screenshotSilentSendRef = useRef(false);
-  const screenshotAnalysisModeRef = useRef(screenshotAnalysisMode);
   const languageModeRef = useRef(languageMode);
   const useResumeContextRef = useRef(useResumeContext);
   const resumeSummaryRef = useRef(resumeSummary);
@@ -567,7 +561,6 @@ export default function App() {
         sessionId,
         languageMode: languageModeRef.current,
         modelChoice: llmModelChoiceRef.current,
-        screenshotAnalysisMode: screenshotAnalysisModeRef.current,
         useResumeContext: useResumeContextRef.current,
         resumeSummary: resumeSummaryRef.current,
       };
@@ -586,12 +579,6 @@ export default function App() {
     if (typeof window === "undefined" || !window.desktopApp?.setScreenshotSilentSend) return;
     window.desktopApp.setScreenshotSilentSend(screenshotSilentSend).catch(() => {});
   }, [screenshotSilentSend]);
-
-  useEffect(() => {
-    screenshotAnalysisModeRef.current = screenshotAnalysisMode;
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(SCREENSHOT_ANALYSIS_MODE_KEY, screenshotAnalysisMode);
-  }, [screenshotAnalysisMode]);
 
   useEffect(() => {
     autoSendEnabledRef.current = autoSendEnabled;
@@ -699,8 +686,6 @@ export default function App() {
         setAutoSendEnabled={setAutoSendEnabled}
         screenshotSilentSend={screenshotSilentSend}
         setScreenshotSilentSend={setScreenshotSilentSend}
-        screenshotAnalysisMode={screenshotAnalysisMode}
-        setScreenshotAnalysisMode={setScreenshotAnalysisMode}
         useResumeContext={useResumeContext}
         setUseResumeContext={setUseResumeContext}
         resumeSummary={resumeSummary}
