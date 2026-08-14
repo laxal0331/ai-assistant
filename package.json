@@ -61,6 +61,9 @@
       "node_modules/**/*"
     ],
     "asar": true,
+    "asarUnpack": [
+      "electron/bin/*.exe"
+    ],
     "win": {
       "target": [
         "portable"

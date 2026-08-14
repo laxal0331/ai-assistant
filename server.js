@@ -50,6 +50,7 @@ for (const envPath of envCandidates) {
 }
 
 let serverPort = Number(process.env.PORT) || 3000;
+let screenshotTimingLogPath = "";
 
 const app = express();
 const httpServer = createServer(app);
@@ -259,6 +260,7 @@ function buildVisionRequestBody(prompt, userText, imageDataUrl, stream) {
       },
     ],
     max_tokens: qwenVlMaxTokens,
+    enable_thinking: false,
   };
   if (stream) body.stream = true;
   return body;
@@ -449,6 +451,19 @@ function broadcastUsageUpdate(session) {
   });
 }
 
+function logScreenshotTiming(requestId, label, startedAt) {
+  if (!requestId) return;
+  const elapsed = startedAt ? ` elapsedMs=${Date.now() - startedAt}` : "";
+  const line = `[${new Date().toISOString()}] [screenshot:${requestId}] ${label}${elapsed}`;
+  console.log(line);
+  if (!screenshotTimingLogPath) return;
+  try {
+    fs.appendFileSync(screenshotTimingLogPath, `${line}\n`);
+  } catch (error) {
+    console.error("failed to write screenshot timing log:", error);
+  }
+}
+
 async function handleSessionChatSend(session, msg) {
   if (session.busy) {
     broadcast(session, {
@@ -541,6 +556,9 @@ async function handleSessionVisionChat(session, msg) {
   const text = (msg.text || "").trim();
   const imageBase64 = normalizeImageDataUrl(msg.imageBase64);
   if (!text || !imageBase64) return;
+  const requestId = msg.requestId || "";
+  const startedAt = Date.now();
+  logScreenshotTiming(requestId, `vision chat start imageChars=${imageBase64.length}`);
 
   const creditCost = computeChatCreditCost({
     useResumeContext: Boolean(msg.useResumeContext),
@@ -562,6 +580,8 @@ async function handleSessionVisionChat(session, msg) {
 
   const responseId = crypto.randomUUID();
   try {
+    const llmStartedAt = Date.now();
+    let firstTokenLogged = false;
     const answer = await streamVisionLlm(
       text,
       {
@@ -571,6 +591,10 @@ async function handleSessionVisionChat(session, msg) {
         imageBase64,
       },
       (chunk) => {
+        if (!firstTokenLogged) {
+          firstTokenLogged = true;
+          logScreenshotTiming(requestId, "vision llm first token", llmStartedAt);
+        }
         broadcast(session, {
           type: "response.delta",
           event_id: crypto.randomUUID(),
@@ -579,6 +603,7 @@ async function handleSessionVisionChat(session, msg) {
         });
       },
     );
+    logScreenshotTiming(requestId, `vision llm complete chars=${answer.length}`, llmStartedAt);
 
     if (isQuotaEnabled()) {
       consumeCredits(creditCost, {
@@ -597,6 +622,7 @@ async function handleSessionVisionChat(session, msg) {
       event: doneEvent,
     });
   } catch (error) {
+    logScreenshotTiming(requestId, `vision chat failed error=${error?.message || String(error)}`);
     console.error("session vision chat error:", error);
     const errEvent = makeAssistantEvent(`请求失败：${error.message || error}`);
     appendEvent(session, errEvent);
@@ -607,6 +633,102 @@ async function handleSessionVisionChat(session, msg) {
     });
   } finally {
     session.busy = false;
+    logScreenshotTiming(requestId, "vision chat complete", startedAt);
+  }
+}
+
+async function handleSessionOcrChat(session, msg) {
+  if (session.busy) {
+    broadcast(session, {
+      type: "system.error",
+      text: "上一条消息仍在处理中，请稍候。",
+    });
+    return;
+  }
+
+  const text = (msg.text || "").trim() || "请解答图中内容，先给结论再给要点。";
+  const imageBuffer = msg.imageBuffer;
+  if (!imageBuffer?.length) return;
+  const requestId = msg.requestId || "";
+  const startedAt = Date.now();
+  logScreenshotTiming(requestId, `ocr chat start bytes=${imageBuffer.length}`);
+
+  const creditCost = computeChatCreditCost({
+    useResumeContext: Boolean(msg.useResumeContext),
+    imageCount: 1,
+  });
+  const quotaCheck = checkCanConsume(creditCost);
+  if (!quotaCheck.ok) {
+    broadcast(session, {
+      type: "system.error",
+      text: quotaCheck.message,
+    });
+    return;
+  }
+
+  session.busy = true;
+  const userEvent = makeUserEvent(`${text}\n[screenshot]`, msg.source || "pc");
+  appendEvent(session, userEvent);
+  broadcast(session, { type: "event.append", event: userEvent });
+
+  const responseId = crypto.randomUUID();
+  try {
+    const ocrStartedAt = Date.now();
+    const ocrText = await recognizeImageBuffer(imageBuffer, msg.languageMode || "zh-CN");
+    logScreenshotTiming(requestId, `ocr complete chars=${ocrText.length}`, ocrStartedAt);
+    const llmText = `${text}\n\n${ocrText}`.trim();
+    const llmStartedAt = Date.now();
+    let firstTokenLogged = false;
+    const answer = await streamLlm(
+      llmText,
+      {
+        useResumeContext: Boolean(msg.useResumeContext),
+        resumeSummary: msg.resumeSummary || "",
+        modelChoice: msg.modelChoice || "auto",
+      },
+      (chunk) => {
+        if (!firstTokenLogged) {
+          firstTokenLogged = true;
+          logScreenshotTiming(requestId, "llm first token", llmStartedAt);
+        }
+        broadcast(session, {
+          type: "response.delta",
+          event_id: crypto.randomUUID(),
+          response_id: responseId,
+          delta: { text: chunk },
+        });
+      },
+    );
+    logScreenshotTiming(requestId, `llm complete chars=${answer.length}`, llmStartedAt);
+
+    if (isQuotaEnabled()) {
+      consumeCredits(creditCost, {
+        source: msg.source || "pc",
+        useResumeContext: Boolean(msg.useResumeContext),
+        imageCount: 1,
+      });
+      broadcastUsageUpdate(session);
+    }
+
+    const doneEvent = makeAssistantEvent(answer || "未生成回复。");
+    appendEvent(session, doneEvent);
+    broadcast(session, {
+      type: "response.done",
+      response_id: responseId,
+      event: doneEvent,
+    });
+  } catch (error) {
+    console.error("session ocr chat error:", error);
+    const errEvent = makeAssistantEvent(`请求失败：${error.message || error}`);
+    appendEvent(session, errEvent);
+    broadcast(session, {
+      type: "response.done",
+      response_id: responseId,
+      event: errEvent,
+    });
+  } finally {
+    session.busy = false;
+    logScreenshotTiming(requestId, "ocr chat complete", startedAt);
   }
 }
 
@@ -980,6 +1102,8 @@ app.post("/api/chat-text", async (req, res) => {
 
 app.post("/api/vision-chat", imageUpload.single("image"), (req, res) => {
   try {
+    const requestId = req.body?.requestId || "";
+    logScreenshotTiming(requestId, `api vision-chat received bytes=${req.file?.buffer?.length || 0}`);
     const session = getSession(req.body?.sessionId);
     if (!session) {
       res.status(404).json({ error: "session not found" });
@@ -1001,6 +1125,7 @@ app.post("/api/vision-chat", imageUpload.single("image"), (req, res) => {
 
     res.json({ ok: true });
     handleSessionVisionChat(session, {
+      requestId,
       text: req.body?.text || "请解答图中内容，先给结论再给要点。",
       imageBase64,
       source: req.body?.source || "pc",
@@ -1016,6 +1141,47 @@ app.post("/api/vision-chat", imageUpload.single("image"), (req, res) => {
   } catch (error) {
     console.error("vision-chat error:", error);
     res.status(500).json({ error: error.message || "vision chat failed" });
+  }
+});
+
+app.post("/api/ocr-chat", imageUpload.single("image"), (req, res) => {
+  try {
+    const requestId = req.body?.requestId || "";
+    logScreenshotTiming(requestId, `api ocr-chat received bytes=${req.file?.buffer?.length || 0}`);
+    const session = getSession(req.body?.sessionId);
+    if (!session) {
+      res.status(404).json({ error: "session not found" });
+      return;
+    }
+    if (session.busy) {
+      res.status(409).json({ error: "busy" });
+      return;
+    }
+    if (!req.file?.buffer?.length) {
+      res.status(400).json({ error: "image is required" });
+      return;
+    }
+
+    res.json({ ok: true });
+    handleSessionOcrChat(session, {
+      requestId,
+      text: req.body?.text || "请解答图中内容，先给结论再给要点。",
+      imageBuffer: req.file.buffer,
+      source: req.body?.source || "pc",
+      languageMode: req.body?.languageMode || "zh-CN",
+      modelChoice: req.body?.modelChoice || "auto",
+      useResumeContext: req.body?.useResumeContext === "true",
+      resumeSummary: req.body?.resumeSummary || "",
+    }).catch((error) => {
+      console.error("ocr chat background error:", error);
+      broadcast(session, {
+        type: "system.error",
+        text: `请求失败：${error.message || error}`,
+      });
+    });
+  } catch (error) {
+    console.error("ocr-chat error:", error);
+    res.status(500).json({ error: error.message || "ocr chat failed" });
   }
 });
 
@@ -1120,6 +1286,7 @@ export async function startServer(options = {}) {
 
   const usageDataDir =
     options.userDataDir || path.join(rootDir, ".data", "usage");
+  screenshotTimingLogPath = path.join(usageDataDir, "screenshot-timing.log");
   initUsageQuota({ dataDir: usageDataDir });
   initSttVocabulary();
 

@@ -14,6 +14,8 @@ const {
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const { randomUUID } = require("crypto");
+const { Blob } = require("buffer");
 const { pathToFileURL } = require("url");
 const { captureFullScreenScreenshot } = require("./captureRegion.cjs");
 const { getTrayIcon } = require("./trayIcon.cjs");
@@ -32,6 +34,18 @@ let isQuitting = false;
 let screenshotHotkey = DEFAULT_ACCELERATOR;
 let screenshotHotkeyLabel = "Ctrl+S";
 let screenshotSilentSend = false;
+const SCREENSHOT_CONTEXT_TIMEOUT_MS = 5000;
+
+function logScreenshotTiming(requestId, label, startedAt) {
+  const elapsed = startedAt ? ` elapsedMs=${Date.now() - startedAt}` : "";
+  const line = `[${new Date().toISOString()}] [screenshot:${requestId}] ${label}${elapsed}`;
+  console.log(line);
+  try {
+    fs.appendFileSync(path.join(app.getPath("userData"), "screenshot-timing.log"), `${line}\n`);
+  } catch (error) {
+    console.error("failed to write screenshot timing log:", error);
+  }
+}
 
 function getAppRoot() {
   return app.getAppPath();
@@ -110,10 +124,11 @@ async function startBackend() {
 
 function createMainWindow(port) {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    width: 980,
+    height: 680,
     minWidth: 400,
     minHeight: 320,
+    center: true,
     title: "AI Assistant",
     icon: path.join(__dirname, "assets", "app-icon.png"),
     show: false,
@@ -189,15 +204,138 @@ function createTray() {
   });
 }
 
+function dataUrlToBlob(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+  if (!match) return null;
+  const buffer = Buffer.from(match[2], "base64");
+  return new Blob([buffer], { type: match[1] || "image/jpeg" });
+}
+
+function requestScreenshotContext() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return Promise.reject(new Error("主窗口未就绪"));
+  }
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("获取截图会话超时"));
+    }, SCREENSHOT_CONTEXT_TIMEOUT_MS);
+
+    function cleanup() {
+      clearTimeout(timer);
+      ipcMain.removeListener("desktop-screenshot-context-response", handleResponse);
+    }
+
+    function handleResponse(_event, payload) {
+      if (payload?.requestId !== requestId) return;
+      cleanup();
+      if (!payload.ok) {
+        reject(new Error(payload.error || "获取截图会话失败"));
+        return;
+      }
+      resolve(payload.context || {});
+    }
+
+    ipcMain.on("desktop-screenshot-context-response", handleResponse);
+    mainWindow.webContents.send("desktop-screenshot-context-request", { requestId });
+  });
+}
+
+async function uploadScreenshotToOcrChat(imageBase64, context = {}) {
+  const sessionId = String(context.sessionId || "").trim();
+  if (!sessionId) {
+    throw new Error("截图会话未连接");
+  }
+  const blob = dataUrlToBlob(imageBase64);
+  if (!blob) {
+    throw new Error("截图图片无效");
+  }
+  const formData = new FormData();
+  formData.append("sessionId", sessionId);
+  formData.append("requestId", String(context.requestId || ""));
+  formData.append("text", "请解答图中内容，先给结论再给要点。");
+  formData.append("source", "pc");
+  formData.append("languageMode", String(context.languageMode || "zh-CN"));
+  formData.append("modelChoice", String(context.modelChoice || "auto"));
+  formData.append("useResumeContext", String(Boolean(context.useResumeContext)));
+  formData.append("resumeSummary", String(context.resumeSummary || ""));
+  formData.append("image", blob, `screenshot-${Date.now()}.jpg`);
+
+  const resp = await fetch(`http://127.0.0.1:${serverHandle.port}/api/ocr-chat`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || `截图发送失败（${resp.status}）`);
+  }
+}
+
+function normalizeScreenshotAnalysisMode(value) {
+  return value === "vision" ? "vision" : "ocr";
+}
+
+async function uploadScreenshotToAi(imageBase64, context = {}) {
+  const sessionId = String(context.sessionId || "").trim();
+  if (!sessionId) {
+    throw new Error("截图会话未连接");
+  }
+  const blob = dataUrlToBlob(imageBase64);
+  if (!blob) {
+    throw new Error("截图图片无效");
+  }
+
+  const formData = new FormData();
+  formData.append("sessionId", sessionId);
+  formData.append("requestId", String(context.requestId || ""));
+  formData.append("text", "请解答图中内容，先给结论再给要点。");
+  formData.append("source", "pc");
+  formData.append("languageMode", String(context.languageMode || "zh-CN"));
+  formData.append("modelChoice", String(context.modelChoice || "auto"));
+  formData.append("useResumeContext", String(Boolean(context.useResumeContext)));
+  formData.append("resumeSummary", String(context.resumeSummary || ""));
+  formData.append("image", blob, `screenshot-${Date.now()}.jpg`);
+
+  const mode = normalizeScreenshotAnalysisMode(context.screenshotAnalysisMode);
+  const endpoint = mode === "vision" ? "/api/vision-chat" : "/api/ocr-chat";
+  const resp = await fetch(`http://127.0.0.1:${serverHandle.port}${endpoint}`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || `截图发送失败（${resp.status}）`);
+  }
+  return mode;
+}
+
 async function triggerScreenshotToAi() {
   if (!mainWindow) return;
-  const imageBase64 = await captureFullScreenScreenshot();
+  const requestId = randomUUID();
+  const startedAt = Date.now();
+  logScreenshotTiming(requestId, "hotkey received");
+  const captureStartedAt = Date.now();
+  const imageBase64 = await captureFullScreenScreenshot(requestId);
+  logScreenshotTiming(requestId, "capture complete", captureStartedAt);
   if (!imageBase64) return;
   if (!screenshotSilentSend) {
     mainWindow.show();
     mainWindow.focus();
   }
-  mainWindow.webContents.send("desktop-screenshot", { imageBase64 });
+  try {
+    const contextStartedAt = Date.now();
+    const context = await requestScreenshotContext();
+    context.requestId = requestId;
+    logScreenshotTiming(requestId, "context ready", contextStartedAt);
+    const uploadStartedAt = Date.now();
+    const mode = await uploadScreenshotToAi(imageBase64, context);
+    logScreenshotTiming(requestId, `upload accepted mode=${mode}`, uploadStartedAt);
+    logScreenshotTiming(requestId, "main flow complete", startedAt);
+  } catch (error) {
+    showDesktopNotification("截图问 AI", error?.message || String(error));
+    throw error;
+  }
 }
 
 function showDesktopNotification(title, body) {

@@ -1,6 +1,6 @@
 # AI Assistant（语音转写 + 智能问答）
 
-本地 AI 助手：实时语音转写、图文问答、手机同步。支持 **Web 开发模式** 与 **Windows 桌面版（Electron）**。
+本地 AI 助手：实时语音转写、图文问答、截图问 AI、手机同步。支持 **Web 开发模式** 与 **Windows 桌面版（Electron）**。
 
 默认地址：`http://localhost:3000`（桌面版由 Electron 内嵌打开）。
 
@@ -9,9 +9,10 @@
 - 后端：`Node.js`、`Express`、`ws`
 - 前端：`React`、`Vite`
 - 桌面：`Electron`（托盘、全局截图快捷键、Windows 系统环回音频、窗口防捕获）
+- 截图：Windows 原生截图助手 `native-capture.exe`，失败时回退 Electron `desktopCapturer`
 - 语音转写：`Deepgram`（Nova-3，岗位词库 keyterm + 事后纠正）
 - 大模型：`DeepSeek`（默认）、`Cerebras`（可选，自动 fallback）
-- 图片 OCR：阿里云统一识别（中/英/日）；桌面截图会转 JPEG、限制最长边并超时重试
+- 图片识别：阿里云 OCR 统一识别，或 `qwen3-vl-flash` 识图大模型
 
 ## 功能说明
 
@@ -19,13 +20,15 @@
 - **实时转写**：WebSocket → Deepgram；语言 `zh-CN` / `en` / `ja`
 - **转写词汇（岗位）**：设置中切换 **前端 / 后端 / Agent·全栈**，提高专业术语识别率
 - **自动发送**：静音 800ms 后发送；可设最小字数阈值
-- **麦克风暂停转写**：麦克风模式下 **Ctrl+X** 暂停/恢复转写（答题时避免误触发自动发送扣次）
-- **图文输入**：贴图并行预 OCR；截图快捷键（桌面版默认 Ctrl+S）截屏问 AI；桌面截图会转为 JPEG 85、最长边限制为 1920px，OCR 单次 10s 超时并对 timeout 自动重试一次；可设置**截图发送时不弹出主窗口**（手机同步不受影响）
+- **麦克风暂停转写**：麦克风模式下 **Ctrl+X** 暂停/恢复转写，答题时避免误触发自动发送扣次
+- **截图问 AI**：桌面版默认快捷键 Ctrl+S；截图会压缩为 JPEG 75、最长边 1200px
+- **截图处理方式**：设置中可选 **OCR 识字**（默认，适合纯文字，通常更快）或 **Qwen 识图大模型**（能理解画面，但首字等待可能更慢）
+- **截图耗时日志**：截图捕获、OCR、普通 AI 回答、Qwen 首字与完整回答都会写入 `screenshot-timing.log`，便于定位卡顿
 - **参考资料上下文**：上传 `.md/.txt` 摘要；涉及经历类问题时注入；勾选后扣次 ×2
-- **手机同步**：局域网扫码，手机看回答、发文字；同步弹窗默认显示手机二维码，可一键切换为手表二维码（只读、大字、轻量页面）
-- **Windows 防屏幕捕获**：桌面版启动后强制开启窗口内容保护，在支持的 Windows 版本上屏幕共享/录屏/截图会排除应用窗口
-- **企业微信智能机器人**（可选）：API 长连接，企微里发文字/语音问 AI；**无需 ngrok**（见 `docs/wecom-bot-setup.md`）
-- **用量与充值**：新机器默认 20 次；LLM **成功**后才扣次；充值码兑换（见 `.env` 中 `RECHARGE_SECRET`）
+- **手机同步**：局域网扫码，手机看回答、发文字；同步弹窗可切换手机二维码 / 手表二维码
+- **Windows 防屏幕捕获**：桌面版启动后开启窗口内容保护，在支持的 Windows 版本上屏幕共享/录屏/截图会排除应用窗口
+- **企业微信智能机器人**（可选）：API 长连接，企微里发文字/语音问 AI；无需 ngrok（见 `docs/wecom-bot-setup.md`）
+- **用量与充值**：新机器默认 20 次；LLM 成功后才扣次；充值码兑换（见 `.env` 中 `RECHARGE_SECRET`）
 
 ## 目录结构
 
@@ -33,20 +36,25 @@
 .
 ├─ client/                      # React 前端
 ├─ electron/                    # 桌面壳（main / preload / 截图 / 托盘）
+│  ├─ bin/native-capture.exe     # Windows 原生截图助手
+│  └─ native-capture/            # 原生截图助手源码
 ├─ server/                      # 服务端模块（OCR、用量、充值码、词库、会话）
 │  └─ vocabulary/profiles/      # 转写岗位词库（frontend / backend / agent-fullstack）
 ├─ scripts/issue-recharge-code.js
 ├─ server.js                    # Express 入口、API、WebSocket
 ├─ dist/                        # 构建产物（client + server）
-└─ release/win-unpacked/        # Windows 桌面打包输出
+├─ release/                     # Windows 桌面打包输出
+└─ 重新打包.bat                  # 双击打包脚本
 ```
 
 ## 环境要求
 
 - `Node.js >= 18`
+- Windows 桌面打包需要系统自带 .NET Framework C# 编译器（脚本会自动查找）
 - `DEEPGRAM_API_KEY`（转写）
 - `DEEPSEEK_API_KEY` 和/或 `CEREBRAS_API_KEY`（问答）
 - 图片 OCR 需配置阿里云 AccessKey（见 `.env.example`）
+- Qwen 识图需配置 `DASHSCOPE_API_KEY`
 
 ## 环境变量
 
@@ -61,6 +69,10 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 # CEREBRAS_API_KEY=
 # ALIBABA_CLOUD_ACCESS_KEY_ID=
 # ALIBABA_CLOUD_ACCESS_KEY_SECRET=
+# DASHSCOPE_API_KEY=
+# QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+# QWEN_VL_MODEL=qwen3-vl-flash
+# QWEN_VL_MAX_TOKENS=400
 # USAGE_QUOTA_ENABLED=1
 # USAGE_DEFAULT_CREDITS=20
 # RECHARGE_SECRET=          # 充值码签名，仅管理员持有
@@ -88,12 +100,16 @@ npm run electron:dev
 
 ### 桌面打包（给用户）
 
+双击项目根目录的 `重新打包.bat` 即可。脚本会先结束正在运行的 `AI Assistant` 进程，编译 Windows 原生截图助手，再生成便携版 exe。
+
+也可以手动执行：
+
 ```bash
 npm run build
-npm run dist:dir
+npm run dist
 ```
 
-输出：`release/win-unpacked/AI Assistant.exe`。分发时可整文件夹 zip；更新前需完全退出托盘中的旧进程。
+输出：`release/AI Assistant 1.0.0.exe`，目录版输出在 `release/win-unpacked/AI Assistant.exe`。
 
 ## 常用脚本
 
@@ -104,6 +120,7 @@ npm run dist:dir
 | `npm run build` | 构建 `dist/client` + `dist/server` |
 | `npm run electron:dev` | Electron 开发调试 |
 | `npm run dist:dir` | Windows 目录版打包 |
+| `npm run dist` | Windows 便携版打包 |
 | `npm run issue-code` | 生成充值码（需 `RECHARGE_SECRET`） |
 
 ## 主要接口
@@ -114,6 +131,8 @@ npm run dist:dir
 - `GET /api/stt/vocab-profiles` — 转写岗位词库列表
 - `POST /api/chat-text` — 文本问答
 - `POST /api/ocr` — 图片 OCR
+- `POST /api/ocr-chat` — 截图先 OCR，再交给普通文字模型回答
+- `POST /api/vision-chat` — 截图直接交给 Qwen 识图模型回答
 - `POST /api/resume-md` — 上传参考资料并生成摘要
 - `POST /api/session` — 创建手机同步会话
 - `GET /w/:sessionId` — 手表只读同步页面（大字、轻量、无底部输入）
@@ -129,17 +148,17 @@ npm run dist:dir
 ## 常见问题
 
 - **端口占用**：修改 `.env` 中 `PORT`
-- **系统音频失败（浏览器）**：共享弹窗需勾选系统音频；**桌面版**依赖 Windows 环回，Mac 无同等能力
-- **打包失败 Access denied**：先结束所有 `AI Assistant` 进程再 `npm run dist:dir`
-- **改代码后 exe 仍是旧界面**：需 `build` + `dist:dir`，不能只做 `electron:dev`
-- **截图问 AI / OCR 慢或 ReadTimeout**：桌面截图会转 JPEG 85、最长边限制 1920px；OCR 单次 10s 超时，并对 timeout 自动重试一次。全屏复杂文字仍可能变慢，建议框选更小范围或减少同屏文字量
-- **无回答 / 500**：检查 Deepgram、DeepSeek（或 Cerebras）Key 与网络
+- **系统音频失败（浏览器）**：共享弹窗需勾选系统音频；桌面版依赖 Windows 环回，Mac 无同等能力
+- **打包失败 Access denied**：先结束所有 `AI Assistant` 进程，或直接双击 `重新打包.bat`
+- **改代码后 exe 仍是旧界面**：需重新打包，不能只做 `electron:dev`
+- **截图问 AI / OCR 慢或 ReadTimeout**：桌面截图会转 JPEG 75、最长边限制 1200px；截图捕获优先使用 Windows 原生截图助手，失败时才回退 Electron `desktopCapturer`。全屏复杂文字仍可能让 OCR 或视觉模型变慢，可在设置中切换 OCR / Qwen 识图并查看 `screenshot-timing.log`
+- **无回答 / 500**：检查 Deepgram、DeepSeek（或 Cerebras）、DashScope、阿里云 OCR Key 与网络
 - **转写 400 / 1006**：多为 Deepgram keyterm 超限；默认已限制为 65 个岗位词，通用词靠事后纠正；仍失败则检查 `DEEPGRAM_API_KEY`
 
 ## 安全提示
 
 - 勿将 `.env`、真实 API Key、`RECHARGE_SECRET` 提交 Git 或发给不可信用户
-- 充值码与本地 `usage.json` 为轻量防滥用，**不能**当作强 DRM
+- 充值码与本地 `usage.json` 为轻量防滥用，不能当作强 DRM
 
 ## License
 

@@ -25,4 +25,24 @@ contextBridge.exposeInMainWorld("desktopApp", {
     ipcRenderer.on("desktop-screenshot", handler);
     return () => ipcRenderer.removeListener("desktop-screenshot", handler);
   },
+  onScreenshotContextRequest(callback) {
+    const handler = async (_event, payload) => {
+      try {
+        const result = await callback(payload);
+        ipcRenderer.send("desktop-screenshot-context-response", {
+          requestId: payload?.requestId,
+          ok: true,
+          context: result || {},
+        });
+      } catch (error) {
+        ipcRenderer.send("desktop-screenshot-context-response", {
+          requestId: payload?.requestId,
+          ok: false,
+          error: error?.message || String(error),
+        });
+      }
+    };
+    ipcRenderer.on("desktop-screenshot-context-request", handler);
+    return () => ipcRenderer.removeListener("desktop-screenshot-context-request", handler);
+  },
 });

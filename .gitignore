@@ -1,6 +1,10 @@
 # build output
 dist/
 release/
+release-updated/
+
+# local runtime/test data
+.data/
 
 # dependencies
 node_modules/
