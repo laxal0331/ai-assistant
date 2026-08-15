@@ -328,17 +328,9 @@ export default function SettingsPanel({
             {hotkeyError ? (
               <p className="text-xs text-red-700 bg-red-50 rounded p-2">{hotkeyError}</p>
             ) : null}
-            <label className="flex items-start gap-2 mt-1">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={screenshotSilentSend}
-                onChange={(e) => setScreenshotSilentSend(e.target.checked)}
-              />
-              <span className="text-xs text-gray-600 leading-relaxed">
-                截图发送时不显示主窗口（后台 Qwen 识图并问 AI，手机同步照常收到回答；失败时用系统通知提示）
-              </span>
-            </label>
+            <p className="text-xs text-gray-600 leading-relaxed mt-1">
+              截图快捷键默认后台发送：不显示主窗口，不弹通知；手机同步照常收到回答。
+            </p>
           </div>
         ) : null}
 

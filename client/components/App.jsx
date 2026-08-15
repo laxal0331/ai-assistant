@@ -88,7 +88,7 @@ export default function App() {
   const [composerBusy, setComposerBusy] = useState(false);
   const [activeAudioSource, setActiveAudioSource] = useState("none");
   const [micTranscriptionPaused, setMicTranscriptionPaused] = useState(false);
-  const [screenshotSilentSend, setScreenshotSilentSend] = useState(false);
+  const [screenshotSilentSend, setScreenshotSilentSend] = useState(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   const sync = useSessionSync({
@@ -116,7 +116,7 @@ export default function App() {
   const activeAudioSourceRef = useRef("none");
   const transcriptSyncTimerRef = useRef(null);
   const micTranscriptionPausedRef = useRef(false);
-  const screenshotSilentSendRef = useRef(false);
+  const screenshotSilentSendRef = useRef(true);
   const languageModeRef = useRef(languageMode);
   const useResumeContextRef = useRef(useResumeContext);
   const resumeSummaryRef = useRef(resumeSummary);
@@ -124,11 +124,7 @@ export default function App() {
   function reportComposerError(message, silentUi = false) {
     const text = message || "未知错误";
     if (silentUi) {
-      sync.sendSystem(`截图问 AI 失败：${text}`).catch(() => {});
-      window.desktopApp?.showNotification?.({
-        title: "截图问 AI",
-        body: text,
-      });
+      console.error("silent composer error:", text);
       return;
     }
     window.alert(text);
@@ -204,7 +200,6 @@ export default function App() {
       try {
         const msg = JSON.parse(evt.data);
         if (msg.type === "error") {
-          sync.sendSystem(`转写通道错误: ${msg.message || "unknown error"}`).catch(() => {});
           return;
         }
         if (msg.type === "ready") {
@@ -281,7 +276,6 @@ export default function App() {
       return;
     }
     resumeMicTranscription();
-    sync.sendSystem("麦克风转写已恢复").catch(() => {});
   }
 
   async function startSession(options = {}) {
@@ -428,7 +422,6 @@ export default function App() {
       const message = error?.message || String(error);
       reportComposerError(message, silentUi);
       if (!silentUi) {
-        sync.sendSystem(`图片识别失败：${message}`).catch(() => {});
       }
     } finally {
       setComposerBusy(false);
@@ -442,23 +435,19 @@ export default function App() {
       body: JSON.stringify({ content: text }),
     });
     if (!response.ok) {
-      sync.sendSystem(`简历上传失败（${response.status}）`).catch(() => {});
       return;
     }
     const data = await response.json();
     setResumeSummary(data.summary || "");
     setUseResumeContext(true);
-    sync.sendSystem("简历已上传并生成摘要，已开启简历上下文。").catch(() => {});
   }
 
   async function submitTranscript() {
     const text = getCurrentTranscript();
     if (!text) {
-      sync.sendSystem("暂无可发送转写，请先播放系统音频。").catch(() => {});
       return;
     }
     if (countEffectiveChars(text) < minSendChars) {
-      sync.sendSystem(`转写字数不足 ${minSendChars}，已拦截发送。`).catch(() => {});
       return;
     }
     finalTextRef.current = "";
@@ -568,10 +557,8 @@ export default function App() {
   }, [sync.ensureSession]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.desktopApp?.getScreenshotSilentSend) return;
-    const enabled = Boolean(window.desktopApp.getScreenshotSilentSend());
-    setScreenshotSilentSend(enabled);
-    screenshotSilentSendRef.current = enabled;
+    setScreenshotSilentSend(true);
+    screenshotSilentSendRef.current = true;
   }, []);
 
   useEffect(() => {

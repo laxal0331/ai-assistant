@@ -69,14 +69,32 @@ const dashscopeApiKey = process.env.DASHSCOPE_API_KEY || "";
 const qwenBaseUrl = (process.env.QWEN_BASE_URL || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
 const qwenVlModel = process.env.QWEN_VL_MODEL || "qwen3-vl-flash";
 const llmMaxTokens = Number(process.env.LLM_MAX_TOKENS) || 400;
-const qwenVlMaxTokens = Number(process.env.QWEN_VL_MAX_TOKENS) || llmMaxTokens;
+const qwenVlMaxTokens = Number(process.env.QWEN_VL_MAX_TOKENS) || 1200;
 const llmProviderOrder = (process.env.LLM_PROVIDER_ORDER || "deepseek")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 const systemPrompt =
   process.env.SYSTEM_PROMPT ||
-  "你是中文AI助手。先给结论，再给要点，语言简洁。";
+  [
+    "你是中文速答助手，重点服务面试、笔试、学习和排查问题。",
+    "默认回答要短，只说重点，不写长篇背景。",
+    "固定格式：结论：一句话。要点：1-4 条。",
+    "除非用户明确要求详细解释，否则不要写应用提示、典型场景、延伸考点、总结一下等额外内容。",
+    "如果用户要求代码，直接给可用代码和必要复杂度。",
+    "如果问题很多，逐题回答，每题最多 1 个结论 + 3 个要点。",
+  ].join("\n");
+const screenshotVisionPrompt = [
+  "你是中文考试/面试截图答题助手。",
+  "任务不是概括图片，而是直接给出图片里题目的答案。",
+  "先通读整张截图，识别题号、列表、代码块、滚动区域和被遮挡内容。",
+  "如果图片里有多道题，按原题顺序逐题作答；不要只回答最醒目的一道题。",
+  "固定格式：结论：一句话。要点：1-4 条。",
+  "每题只保留答案和必要步骤，不写题型背景、核心是、应用提示、典型场景、延伸考点。",
+  "如果题目要求选择，直接给选项和答案；如果题目要求代码，直接给可用代码。",
+  "算法/编程题只给最优解、关键步骤、时间复杂度、空间复杂度。",
+  "回答要短，重点展示答案。",
+].join("\n");
 let latestResumeSummary = "";
 
 function isResumeRelated(question) {
@@ -133,10 +151,32 @@ async function renderClientPage(url, { isProduction, rootDir, activeVite }) {
 function buildChatPrompt(userText, options = {}) {
   const { useResumeContext = false, resumeSummary = "" } = options;
   const injectedResume = (resumeSummary || latestResumeSummary || "").trim();
-  const shouldUseResume = useResumeContext && injectedResume;
-  return shouldUseResume
-    ? `${systemPrompt}\n\n补充约束：用户已启用参考资料上下文。请优先结合以下参考资料回答；如果问题与资料关系不明显，先说明资料中没有直接信息，再用通用知识补充，不要编造资料里不存在的经历或结论。\n\n参考资料摘要：\n${injectedResume}`
-    : systemPrompt;
+  if (!useResumeContext || !injectedResume) return systemPrompt;
+  return [
+    systemPrompt,
+    "",
+    "参考资料只作为补充依据。优先回答当前问题，保持短答格式。",
+    "如果当前问题与参考资料无关，不要强行引用参考资料。",
+    "不要编造参考资料里不存在的经历、项目或结论。",
+    "",
+    "参考资料摘要：",
+    injectedResume,
+  ].join("\n");
+}
+
+function buildScreenshotVisionPrompt(options = {}) {
+  const { useResumeContext = false, resumeSummary = "" } = options;
+  const injectedResume = (resumeSummary || latestResumeSummary || "").trim();
+  if (!useResumeContext || !injectedResume) return screenshotVisionPrompt;
+  return [
+    screenshotVisionPrompt,
+    "",
+    "参考资料只作为补充依据。优先回答截图里的当前题目，保持短答格式。",
+    "如果截图题目与参考资料无关，不要强行引用参考资料。",
+    "",
+    "参考资料摘要：",
+    injectedResume,
+  ].join("\n");
 }
 
 function formatLlmError(providerName, status, detail) {
@@ -332,7 +372,7 @@ async function callQwenVision(userText, options, { stream = false, onChunk } = {
     throw new Error("Invalid image payload for Qwen vision");
   }
 
-  const prompt = buildChatPrompt(userText, options);
+  const prompt = buildScreenshotVisionPrompt(options);
   const started = Date.now();
   const resp = await fetch(`${qwenBaseUrl}/chat/completions`, {
     method: "POST",
@@ -444,6 +484,87 @@ function makeAssistantEvent(text) {
   };
 }
 
+function getTextFromContentParts(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .map((part) => {
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.transcript === "string") return part.transcript;
+      return "";
+    })
+    .filter(Boolean)
+    .join("")
+    .trim();
+}
+
+function getEventMessage(event) {
+  const item = event?.item;
+  if (item?.role === "user") {
+    const text = getTextFromContentParts(item.content);
+    return text ? { role: "user", text } : null;
+  }
+
+  const outputs = event?.response?.output;
+  if (!Array.isArray(outputs)) return null;
+  const message = outputs.find((out) => out?.role === "assistant");
+  const text = getTextFromContentParts(message?.content);
+  return text ? { role: "assistant", text } : null;
+}
+
+function truncateContextText(text, maxLength) {
+  const value = String(text || "")
+    .replace(/\[screenshot\]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}...`;
+}
+
+function buildRecentConversationContext(session, maxRounds = 3) {
+  const messages = [...(session?.events || [])]
+    .reverse()
+    .map(getEventMessage)
+    .filter(Boolean);
+  const rounds = [];
+  let pendingUser = null;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      pendingUser = message.text;
+      continue;
+    }
+    if (message.role === "assistant" && pendingUser) {
+      rounds.push({
+        user: pendingUser,
+        assistant: message.text,
+      });
+      pendingUser = null;
+    }
+  }
+
+  const recentRounds = rounds.slice(-maxRounds);
+  if (!recentRounds.length) return "";
+  return recentRounds
+    .map((round, index) => {
+      const user = truncateContextText(round.user, 260);
+      const assistant = truncateContextText(round.assistant, 420);
+      return `${index + 1}. 用户：${user}\n   AI：${assistant}`;
+    })
+    .join("\n");
+}
+
+function attachRecentContext(userText, recentContext) {
+  const text = String(userText || "").trim();
+  if (!recentContext) return text;
+  return [
+    "以下是最近 3 轮上下文，仅用于理解连续追问；如果与当前问题冲突，以当前问题为准。",
+    recentContext,
+    "",
+    "当前问题：",
+    text,
+  ].join("\n");
+}
+
 function broadcastUsageUpdate(session) {
   broadcast(session, {
     type: "usage.update",
@@ -490,6 +611,8 @@ async function handleSessionChatSend(session, msg) {
   }
 
   session.busy = true;
+  const recentContext = buildRecentConversationContext(session, 3);
+  const llmText = attachRecentContext(text, recentContext);
   const userEvent = makeUserEvent(text, msg.source || "pc");
   appendEvent(session, userEvent);
   broadcast(session, { type: "event.append", event: userEvent });
@@ -502,7 +625,7 @@ async function handleSessionChatSend(session, msg) {
       modelChoice: msg.modelChoice || "auto",
     };
     const answer = await streamLlm(
-      text,
+      llmText,
       llmOptions,
       (chunk) => {
         broadcast(session, {
@@ -574,6 +697,8 @@ async function handleSessionVisionChat(session, msg) {
   }
 
   session.busy = true;
+  const recentContext = buildRecentConversationContext(session, 3);
+  const visionText = attachRecentContext(text, recentContext);
   const userEvent = makeUserEvent(`${text}\n[screenshot]`, msg.source || "pc");
   appendEvent(session, userEvent);
   broadcast(session, { type: "event.append", event: userEvent });
@@ -583,7 +708,7 @@ async function handleSessionVisionChat(session, msg) {
     const llmStartedAt = Date.now();
     let firstTokenLogged = false;
     const answer = await streamVisionLlm(
-      text,
+      visionText,
       {
         useResumeContext: Boolean(msg.useResumeContext),
         resumeSummary: msg.resumeSummary || "",

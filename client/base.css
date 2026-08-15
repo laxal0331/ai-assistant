@@ -9,6 +9,12 @@ https://tailwindcss.com/docs/preflight
 :root {
   --color-base: #efefef;
   --color-highlight: #ff80ff;
+  --mobile-bg: #0B0F0E;
+  --mobile-chat-bg: #111816;
+  --mobile-text: #C8D0CB;
+  --mobile-muted: #7F8A84;
+  --mobile-border: #1F2A26;
+  --mobile-accent: #6FAF8F;
 }
 
 html,
@@ -32,10 +38,89 @@ body {
   display: none;
 }
 
+.mobile-page {
+  background: var(--mobile-bg);
+  color: var(--mobile-text);
+  font-size: 16px;
+}
+
+.mobile-page-header,
+.mobile-page-footer {
+  background: var(--mobile-bg);
+  border-color: var(--mobile-border);
+}
+
+.mobile-page-header h1 {
+  color: var(--mobile-text);
+  font-size: 1.05rem;
+  line-height: 1.4rem;
+}
+
+.mobile-page-status {
+  color: var(--mobile-muted);
+  font-size: 0.82rem;
+  line-height: 1.15rem;
+}
+
+.mobile-page-main {
+  background: var(--mobile-bg);
+}
+
+.mobile-page .chat-window {
+  color: var(--mobile-text);
+}
+
+.mobile-page .chat-window > .text-gray-500 {
+  color: var(--mobile-muted);
+}
+
+.mobile-page .chat-message {
+  background: var(--mobile-chat-bg) !important;
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text) !important;
+  font-size: 0.98rem;
+  line-height: 1.55rem;
+  box-shadow: none;
+}
+
+.mobile-page .chat-message.bg-blue-100 {
+  border-color: rgba(111, 175, 143, 0.45);
+}
+
+.mobile-page-input {
+  background: var(--mobile-chat-bg);
+  border-color: var(--mobile-border);
+  color: var(--mobile-text);
+  font-size: 1.02rem;
+  line-height: 1.45rem;
+  outline: none;
+}
+
+.mobile-page-input::placeholder {
+  color: var(--mobile-muted);
+}
+
+.mobile-page-input:focus {
+  border-color: var(--mobile-accent);
+  box-shadow: 0 0 0 2px rgba(111, 175, 143, 0.16);
+}
+
+.mobile-page-send,
+.mobile-scroll-bottom {
+  background: var(--mobile-accent) !important;
+  color: #0B0F0E !important;
+  font-size: 0.98rem;
+}
+
+.mobile-page-send:hover,
+.mobile-scroll-bottom:hover {
+  background: #82C09F !important;
+}
+
 @media (max-width: 320px), (max-height: 360px) {
   .mobile-page {
-    background: #f3f4f6;
-    font-size: 12px;
+    background: var(--mobile-bg);
+    font-size: 13px;
   }
 
   .mobile-page-header {
@@ -47,16 +132,16 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.78rem;
-    line-height: 1rem;
+    font-size: 0.86rem;
+    line-height: 1.08rem;
   }
 
   .mobile-page-status {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.65rem;
-    line-height: 0.85rem;
+    font-size: 0.72rem;
+    line-height: 0.92rem;
   }
 
   .mobile-page-main {
@@ -68,13 +153,13 @@ body {
     flex-direction: column;
     gap: 0.1rem;
     margin-bottom: 0.4rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--mobile-border);
     border-radius: 0.45rem;
-    background: #ffffff;
-    color: #111827;
+    background: var(--mobile-chat-bg);
+    color: var(--mobile-text);
     padding: 0.35rem 0.45rem;
-    font-size: 0.68rem;
-    line-height: 0.9rem;
+    font-size: 0.74rem;
+    line-height: 0.98rem;
   }
 
   .watch-readonly-status strong,
@@ -85,7 +170,7 @@ body {
   }
 
   .watch-readonly-status span {
-    color: #4b5563;
+    color: var(--mobile-muted);
   }
 
   .mobile-page-footer {
@@ -100,18 +185,18 @@ body {
     max-width: 100%;
     border-radius: 0.45rem;
     padding: 0.35rem 0.45rem;
-    font-size: 0.72rem;
-    line-height: 1rem;
+    font-size: 0.8rem;
+    line-height: 1.08rem;
     overflow-wrap: anywhere;
   }
 
   .mobile-page .chat-window > .text-gray-500 {
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--mobile-border);
     border-radius: 0.45rem;
-    background: #ffffff;
-    color: #374151;
+    background: var(--mobile-chat-bg);
+    color: var(--mobile-muted);
     padding: 0.4rem 0.45rem;
-    font-size: 0.72rem;
-    line-height: 1rem;
+    font-size: 0.8rem;
+    line-height: 1.08rem;
   }
 }

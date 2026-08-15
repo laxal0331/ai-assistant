@@ -8,7 +8,6 @@ const {
   dialog,
   ipcMain,
   nativeImage,
-  Notification,
   screen,
   session,
   shell,
@@ -34,7 +33,7 @@ let serverHandle = null;
 let isQuitting = false;
 let screenshotHotkey = DEFAULT_ACCELERATOR;
 let screenshotHotkeyLabel = "Ctrl+S";
-let screenshotSilentSend = false;
+let screenshotSilentSend = true;
 const SCREENSHOT_CONTEXT_TIMEOUT_MS = 5000;
 
 function logScreenshotTiming(requestId, label, startedAt) {
@@ -270,7 +269,7 @@ async function uploadScreenshotToAi(imageBase64, context = {}) {
   const formData = new FormData();
   formData.append("sessionId", sessionId);
   formData.append("requestId", String(context.requestId || ""));
-  formData.append("text", "请解答图中内容，先给结论再给要点。");
+  formData.append("text", "请阅读整张截图，按可见题目顺序逐题给出答案。回答先给结论，再给要点，语言简洁。");
   formData.append("source", "pc");
   formData.append("languageMode", String(context.languageMode || "zh-CN"));
   formData.append("modelChoice", String(context.modelChoice || "auto"));
@@ -298,9 +297,6 @@ async function triggerScreenshotToAi() {
   const imageBase64 = await captureFullScreenScreenshot(requestId);
   logScreenshotTiming(requestId, "capture complete", captureStartedAt);
   if (!imageBase64) return;
-  if (!screenshotSilentSend) {
-    showMainWindow();
-  }
   try {
     const contextStartedAt = Date.now();
     const context = await requestScreenshotContext();
@@ -317,8 +313,7 @@ async function triggerScreenshotToAi() {
 }
 
 function showDesktopNotification(title, body) {
-  if (!Notification.isSupported()) return;
-  new Notification({ title: title || "AI Assistant", body: body || "" }).show();
+  console.warn("desktop notification suppressed:", title || "AI Assistant", body || "");
 }
 
 function registerShortcuts() {

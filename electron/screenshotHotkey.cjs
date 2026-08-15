@@ -86,7 +86,8 @@ function saveScreenshotHotkey(accelerator) {
 }
 
 function loadScreenshotSilentSend() {
-  return readConfig().screenshotSilentSend === true;
+  const config = readConfig();
+  return config.screenshotSilentSend !== false;
 }
 
 function saveScreenshotSilentSend(enabled) {

@@ -82,8 +82,8 @@ export default function MobilePage({ sessionId }) {
   }
 
   return (
-    <div className="mobile-page fixed inset-0 flex flex-col overflow-hidden bg-white">
-      <header className="mobile-page-header shrink-0 border-b border-gray-200 px-4 py-3">
+    <div className="mobile-page fixed inset-0 flex flex-col overflow-hidden">
+      <header className="mobile-page-header shrink-0 border-b px-4 py-3">
         <h1 className="text-base font-semibold">手机同步</h1>
         <p className="mobile-page-status text-xs text-gray-500">
           {sync.connectionError
@@ -109,13 +109,13 @@ export default function MobilePage({ sessionId }) {
         <button
           type="button"
           onClick={() => scrollToBottom({ behavior: "smooth" })}
-          className="fixed right-4 bottom-20 z-30 rounded-full bg-gray-900 px-3 py-1.5 text-xs text-white shadow-lg hover:bg-gray-700"
+          className="mobile-scroll-bottom fixed right-4 bottom-20 z-30 rounded-full px-3 py-1.5 text-xs shadow-lg"
         >
           回到最新
         </button>
       ) : null}
 
-      <footer className="mobile-page-footer fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] flex gap-2">
+      <footer className="mobile-page-footer fixed bottom-0 left-0 right-0 z-20 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] flex gap-2">
         <input
           type="text"
           value={message}
@@ -124,9 +124,9 @@ export default function MobilePage({ sessionId }) {
             if (e.key === "Enter" && message.trim()) handleSend();
           }}
           placeholder="输入问题发送给 AI…"
-          className="mobile-page-input flex-1 min-w-0 border border-gray-200 rounded-full px-4 py-2.5 text-base"
+          className="mobile-page-input flex-1 min-w-0 border rounded-full px-4 py-2.5 text-base"
         />
-        <Button onClick={handleSend} className="mobile-page-send bg-blue-600 shrink-0">
+        <Button onClick={handleSend} className="mobile-page-send shrink-0">
           发送
         </Button>
       </footer>
